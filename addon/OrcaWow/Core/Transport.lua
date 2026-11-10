@@ -46,8 +46,8 @@ local function SlotName(i)
 end
 
 ---------------------------------------------------------------------------
--- Link keys. File-local on purpose: `ns` is exported as the OrcaWow global, and
--- nothing outside this file needs the keys.
+-- Link keys. File-local on purpose: nothing outside this file needs them, and `ns` is
+-- shared by every file of the addon.
 
 local link -- { hex, enc, mac = HMAC function }
 local noncePrefix, nonceCounter = nil, 0

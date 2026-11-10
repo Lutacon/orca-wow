@@ -15,8 +15,9 @@
 // with the legacy framing only when an unproven host refuses the v2 hello (close 4001
 // before its ready) or answers v2 token auth with bad_auth (hosts that predate
 // capabilities on it): src/shared/remote-runtime/remote-runtime-client-framing.ts.
-// We do the same, and like Orca never fall back to legacy for a host that already
-// spoke v2 to us.
+// We do the same, but stricter (see PairedTransport): a host that already spoke v2 to
+// us is remembered on disk and never gets legacy again, and new pairings get legacy
+// only when the user opted in.
 //   v2 (mobile-e2ee-v2-contract.ts, paired-e2ee-v2-client-session.ts,
 //       mobile-e2ee-v2-framing.ts, mobile-e2ee-v2-node-key-schedule.ts):
 //     hello  {type:'e2ee_hello', v:2, clientPublicKeyB64, clientNonceB64,
@@ -101,6 +102,16 @@ export class RemoteError extends Error {
 
 const remoteError = (code, message) => new RemoteError(code, message);
 
+// Text that came from a link or another computer, safe to print or log: no C0/C1
+// controls (so no ESC/OSC sequences: colours, cursor moves, OSC 52 clipboard writes)
+// and no bidi overrides. Line breaks and tabs become spaces unless `lines` keeps \n.
+const CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g;
+export function plainText(value, { lines = false } = {}) {
+  let s = String(value ?? '');
+  s = lines ? s.replace(/\r\n?/g, '\n').replace(/\t/g, ' ') : s.replace(/[\r\n\t]+/g, ' ');
+  return s.replace(CONTROLS, '');
+}
+
 // ---- the access link -----------------------------------------------------------
 
 export class PairingLinkError extends Error {
@@ -178,7 +189,8 @@ export function parseAccessLink(input, { now = Date.now() } = {}) {
     const exp = offer.relay?.inviteExpiresAt;
     if (!Number.isInteger(exp) || exp <= now || exp > now + INVITE_TTL_MS) throw new PairingLinkError(`That pairing link has expired. Make a new one. ${WHERE}`);
   }
-  const out = { v: 2, endpoint: offer.endpoint, deviceToken: offer.deviceToken, publicKeyB64: offer.publicKeyB64 };
+  // The normalised form: WHATWG URL parsing drops or percent-encodes control characters.
+  const out = { v: 2, endpoint: endpoint.href, deviceToken: offer.deviceToken, publicKeyB64: offer.publicKeyB64 };
   if (offer.scope) out.scope = offer.scope;
   if (offer.pairedDeviceId) out.pairedDeviceId = offer.pairedDeviceId;
   if (offer.hostDescriptor && typeof offer.hostDescriptor === 'object') out.hostDescriptor = offer.hostDescriptor;
@@ -219,7 +231,11 @@ export function remoteSecretFile(id, dir = DEFAULT_SECRETS_DIR) {
   return path.join(dir, `${id}.json`);
 }
 
-// { id, label, endpoint, deviceToken, publicKeyB64, scope?, pairedDeviceId?, addedAt }
+// { id, label, endpoint, deviceToken, publicKeyB64, scope?, pairedDeviceId?, addedAt,
+//   allowLegacy?, e2ee? }. allowLegacy: the user opted in to the legacy framing
+// (`remote add --allow-legacy`); records saved before that option existed lack it.
+// e2ee: 'v2' once this host authenticated us over E2EE v2, after which the bridge
+// never falls back to legacy for it, across restarts.
 export function saveRemoteSecret(record, dir = DEFAULT_SECRETS_DIR) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = remoteSecretFile(record.id, dir);
@@ -236,6 +252,15 @@ export function readRemoteSecret(id, dir = DEFAULT_SECRETS_DIR) {
   } catch {
     return null;
   }
+}
+
+// Record that this host spoke E2EE v2 (see saveRemoteSecret). A removed pairing stays
+// removed. Returns whether the file now says so.
+export function markRemoteV2(id, dir = DEFAULT_SECRETS_DIR) {
+  const rec = readRemoteSecret(id, dir);
+  if (!rec) return false;
+  if (rec.e2ee !== 'v2') saveRemoteSecret({ ...rec, e2ee: 'v2' }, dir);
+  return true;
 }
 
 export function removeRemoteSecret(id, dir = DEFAULT_SECRETS_DIR) {
@@ -562,7 +587,7 @@ export class PairedSocket {
         try {
           this.onFrame(typeof ev.data === 'string' ? ev.data : new Uint8Array(ev.data));
         } catch (err) {
-          this.fail(err instanceof RemoteError ? err : remoteError('protocol', `Orca on ${this.label} sent something unreadable (${err.message})`));
+          this.fail(err instanceof RemoteError ? err : remoteError('protocol', `Orca on ${this.label} sent something unreadable (${plainText(err.message).slice(0, 200)})`));
         }
       });
       ws.addEventListener('error', () => {}); // a close event follows with the code
@@ -603,9 +628,15 @@ export class PairedSocket {
       }
       const code = reply?.type === 'e2ee_error' ? reply.error?.code : null;
       if (code === 'unauthorized' || code === 'device_revoked') throw remoteError('unauthorized', `Orca on ${this.label} no longer accepts this PC's access link`);
-      // Hosts that predate capabilities on v2 token auth answer bad_auth.
-      if (code === 'bad_auth' && this.framing === 'v2') throw remoteError('v2_refused', 'v2 token auth refused');
-      throw remoteError('protocol', `Orca on ${this.label} refused the handshake${code ? ` (${code})` : ''}`);
+      // Hosts that predate capabilities on v2 token auth answer bad_auth. That answer
+      // is sealed with keys only the pinned host has, so the host itself asked for
+      // legacy (unlike a close before the ready, which anyone on the path can send).
+      if (code === 'bad_auth' && this.framing === 'v2') {
+        const err = remoteError('v2_refused', 'v2 token auth refused');
+        err.attested = true;
+        throw err;
+      }
+      throw remoteError('protocol', `Orca on ${this.label} refused the handshake${code ? ` (${plainText(code).slice(0, 64)})` : ''}`);
     }
     let msg;
     try {
@@ -623,7 +654,7 @@ export class PairedSocket {
     clearTimeout(p.timer);
     if (msg._meta?.runtimeId) this.lastRuntimeId = msg._meta.runtimeId;
     if (msg.ok) p.resolve(msg.result);
-    else p.reject(new OrcaRpcError(msg.error?.code || 'error', msg.error?.message || 'Orca refused the request', msg.error?.data));
+    else p.reject(new OrcaRpcError(plainText(msg.error?.code || 'error').slice(0, 64), plainText(msg.error?.message || 'Orca refused the request').slice(0, 1000), msg.error?.data));
   }
 
   onClose(code, reason) {
@@ -640,7 +671,7 @@ export class PairedSocket {
     if (code === 4001 && stage === 'ready-wait' && this.framing === 'v2') return this.finishOpen?.(remoteError('v2_refused', 'v2 hello refused'));
     if (code === 4001 && stage === 'auth-wait') return this.finishOpen?.(remoteError('unauthorized', `Orca on ${this.label} no longer accepts this PC's access link`));
     if (code === 1013) return this.finishOpen?.(remoteError('busy', `Orca on ${this.label} has too many connections open`));
-    this.finishOpen?.(remoteError('unreachable', `Orca on ${this.label} closed the connection during the handshake${code && code !== 1005 && code !== 1006 ? ` (${code}${reason ? `: ${reason}` : ''})` : ''}`));
+    this.finishOpen?.(remoteError('unreachable', `Orca on ${this.label} closed the connection during the handshake${code && code !== 1005 && code !== 1006 ? ` (${code}${reason ? `: ${plainText(reason).slice(0, 123)}` : ''})` : ''}`));
   }
 
   close() {
@@ -685,8 +716,15 @@ function safeEndpoint(endpoint) {
 
 // What OrcaClient needs from a way to reach Orca (see LocalTransport in orca.js):
 // open() -> { conn, origin, runtimeId, status }, describeFailure(err).
+//
+// Legacy framing has no counters, so anyone on the network path who can force it can
+// replay frames inside a socket. So: once a host authenticated us over v2 (e2ee: 'v2',
+// persisted through onLatch) we never dial legacy for it again; before that, a refused
+// v2 hello (an unauthenticated close) falls back only when allowLegacy isn't false
+// (false for pairings made without --allow-legacy; undefined for records older than
+// that option). A bad_auth sealed by the pinned host may always fall back.
 export class PairedTransport {
-  constructor({ endpoint, deviceToken, publicKeyB64, label = 'the other computer', timeoutMs = 12000, WebSocketImpl } = {}) {
+  constructor({ endpoint, deviceToken, publicKeyB64, label = 'the other computer', timeoutMs = 12000, WebSocketImpl, e2ee, allowLegacy, onLatch, log = () => {} } = {}) {
     if (!endpoint || !deviceToken || !publicKeyB64) throw new Error('PairedTransport needs endpoint, deviceToken and publicKeyB64');
     this.endpoint = endpoint;
     this.deviceToken = deviceToken;
@@ -695,7 +733,10 @@ export class PairedTransport {
     this.timeoutMs = timeoutMs;
     this.WebSocketImpl = WebSocketImpl;
     this.remote = true;
-    this.latched = false; // this host authenticated us over v2: never downgrade
+    this.latched = e2ee === 'v2'; // this host authenticated us over v2: never downgrade
+    this.allowLegacy = allowLegacy !== false;
+    this.onLatch = onLatch;
+    this.log = log;
     this.v2RefusedAt = 0;
     this.framing = null; // what the last connection used
   }
@@ -723,11 +764,22 @@ export class PairedTransport {
     } catch (err) {
       if (err?.code !== 'v2_refused') throw err;
       if (this.latched) throw remoteError('downgrade', `Orca on ${this.label} used newer encryption (E2EE v2) before and now refuses it. Update Orca there; if it is up to date, something on the network is interfering.`);
+      if (!err.attested && !this.allowLegacy) {
+        throw remoteError('legacy_refused', `Orca on ${this.label} refused the current encryption (E2EE v2), and the older one is off for this pairing. Update Orca there. If something on the network may be interfering, don't connect; if it's an old Orca you trust on a trusted network, run orca-wow remote add "${this.label}" --allow-legacy and paste a new access link.`);
+      }
       // An older Orca: it speaks only the legacy framing.
       this.v2RefusedAt = Date.now();
       sock = await this.dial('legacy');
     }
-    if (sock.framing === 'v2') this.latched = true;
+    if (sock.framing === 'v2' && !this.latched) {
+      this.latched = true;
+      try {
+        this.onLatch?.();
+      } catch (err) {
+        this.log(`Orca: couldn't record that ${this.label} uses E2EE v2 (${plainText(err.message)})`);
+      }
+    }
+    if (sock.framing === 'legacy') this.log(`Orca: warning: connected to ${this.label} with the older encryption (legacy framing, no replay protection). Update Orca there.`);
     this.framing = sock.framing;
     let status;
     try {
@@ -737,6 +789,7 @@ export class PairedTransport {
       sock.close();
       throw err;
     }
+    if (status && typeof status.appVersion === 'string') status = { ...status, appVersion: plainText(status.appVersion).slice(0, 64) };
     return { conn: sock, origin: this.origin, runtimeId: status?.runtimeId || sock.lastRuntimeId || undefined, status };
   }
 
@@ -748,9 +801,9 @@ export class PairedTransport {
       case 'busy':
         return `Can't reach Orca on ${this.label}`;
       case 'unauthorized':
-        return `Orca on ${this.label} no longer accepts this PC (its access link was revoked or replaced). Make a new access link there and run: orca-wow remote add "${this.label}" <link>`;
+        return `Orca on ${this.label} no longer accepts this PC (its access link was revoked or replaced). Make a new access link there, run orca-wow remote add "${this.label}" and paste it.`;
       default:
-        return String(err?.message || err).split('\n')[0];
+        return plainText(String(err?.message || err).split('\n')[0]);
     }
   }
 }
@@ -772,8 +825,9 @@ export function checkStatus(status, label = 'the other computer') {
 }
 
 // One connection attempt for the CLI: { ok, status, framing } or { ok: false, error, code }.
-export async function probeRemote(secret, { label = secret.label, timeoutMs = 8000 } = {}) {
-  const t = new PairedTransport({ ...secret, label, timeoutMs });
+// onLatch runs when the host authenticated us over v2 for the first time.
+export async function probeRemote(secret, { label = secret.label, timeoutMs = 8000, onLatch } = {}) {
+  const t = new PairedTransport({ ...secret, label, timeoutMs, onLatch });
   try {
     const { conn, status } = await t.open();
     conn.close();

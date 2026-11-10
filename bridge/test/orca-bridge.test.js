@@ -108,7 +108,72 @@ test('the Orca backend feeds the snapshot and runs commands from the game', asyn
   await b.runCommand({ id: 5, verb: 'new', args: [snap.projects[0].id, 'x', 'nope'] });
   assert.equal(b.results.find((r) => r.id === 5).ok, false);
 
+  // A shell command for the agent is refused, and the game is told how to allow it.
+  await b.runCommand({ id: 6, verb: 'send', args: [done, '!rm -rf build'] });
+  const shell = b.results.find((r) => r.id === 6);
+  assert.equal(shell.ok, false);
+  assert.match(shell.msg, /To allow it, run orca-wow shell on at the computer\.$/, 'the whole message reaches the game');
+  assert.ok(!orca.callsOf('terminal.send').some((p) => p.text.startsWith('!')));
+
   // A model change can't apply to Orca and says so instead of failing silently.
   await b.runCommand({ id: 2, verb: 'model', args: [done, 'claude', 'opus'] });
   assert.equal(b.results.find((r) => r.id === 2).ok, false);
+});
+
+// Orca reports when a wait starts, not what it shows: the thread doesn't change when the
+// agent draws its menu after the hook fired, or when a resized window re-wraps a row.
+// The game must still get the request it can answer.
+test('a request the game saw before it changed on screen is refused once, then answered', async (t) => {
+  const orcaDir = tempDir();
+  const addonsDir = tempDir();
+  const stateDir = tempDir();
+  const orca = new FakeOrca({ dir: orcaDir });
+  orca.worktrees = [worktreeRow({ agents: [agentRow({ state: 'blocked', toolName: 'Bash', toolInput: 'npm test' })] })];
+  orca.terminals = [{ handle: 'h1', worktreeId: 'repo-1::C:/src/app/fix-login', tabId: 'tab-1', leafId: 'leaf-1' }];
+  orca.screens.h1 = ['Thinking…']; // the hook said "waiting" before the menu was drawn
+  orca.waits.h1 = { source: 'hook', reason: 'agent-approval-prompt' };
+  await orca.start();
+  const b = new Bridge({ addonsDir, stateDir, log: () => {}, config: { slots: 10, orca: { userDataDir: orcaDir, stateDir, pollMs: 40, keyDelayMs: 1, retryMs: 50 } } });
+  t.after(async () => {
+    b.stop();
+    await orca.stop().catch(() => {});
+    for (const d of [orcaDir, addonsDir, stateDir]) fs.rmSync(d, { recursive: true, force: true });
+  });
+  b.t3.on('change', (ev) => b.onT3Change(ev));
+  b.t3.start();
+  await waitFor(() => b.t3.state === 'connected' && b.t3.threads.size === 1);
+  const id = threadIdFor('repo-1::C:/src/app/fix-login', 'tab-1:leaf-1');
+  b.client = { view: id, flags: 'o', session: 's', ui: 'u' };
+  await b.refreshView(id, true);
+  const pending = () => b.buildSnapshot().view.pending;
+  assert.equal(pending().pc, true, 'no menu yet: the game can only say No');
+
+  // The menu appears; the thread row doesn't change. The periodic re-read picks it up.
+  orca.screens.h1 = MENU;
+  b.views.get(id).fetchedAt = 0;
+  b.dirty.view = false;
+  await b.recheckWait();
+  assert.equal(pending().pc, undefined, 'now the game offers Yes');
+  assert.equal(b.dirty.view, true, 'and a changed request is worth a publish');
+  const seen = pending().id;
+  // An unchanged request is re-read quietly: nothing new to publish.
+  b.views.get(id).fetchedAt = 0;
+  b.dirty.view = false;
+  await b.recheckWait();
+  assert.equal(pending().id, seen);
+  assert.equal(b.dirty.view, false);
+
+  // The window was resized and a row re-wrapped: the game's request is stale.
+  orca.screens.h1 = [...MENU.slice(0, -2), "   2. Yes, and don't ask again for npm", '      test commands', '   3. No (esc)'];
+  await b.runCommand({ id: 1, verb: 'approve', args: [id, seen, 'accept'] });
+  const refused = b.results.find((r) => r.id === 1);
+  assert.equal(refused.ok, false);
+  assert.match(refused.msg, /question changed/);
+  assert.equal(orca.callsOf('terminal.send').length, 0, 'nothing was pressed');
+  // The result goes out with the current request, which the next try answers.
+  const current = pending().id;
+  assert.notEqual(current, seen);
+  await b.runCommand({ id: 2, verb: 'approve', args: [id, current, 'accept'] });
+  assert.equal(b.results.find((r) => r.id === 2).ok, true, b.results.find((r) => r.id === 2).msg);
+  assert.deepEqual(orca.callsOf('terminal.send').map((s) => s.text), ['1']);
 });

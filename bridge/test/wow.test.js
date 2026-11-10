@@ -132,7 +132,7 @@ test("finds Forever on Windows from Battle.net's records, its default folder, an
     ProgramFiles: path.join(sys, 'Program Files'),
   };
   const win = (drives = []) => findAny({ platform: 'win32', env, drives });
-  assert.deepEqual(win(), { forever: [], wowOnly: [], prefixes: [] });
+  assert.deepEqual(win(), { forever: [], wowOnly: [], prefixes: [], origin: {} });
 
   // Battle.net installed, Retail only.
   touch(path.join(env.ProgramData, 'Battle.net/Agent/product.db'), '');
@@ -160,6 +160,31 @@ test("finds Forever on Windows from Battle.net's records, its default folder, an
   r = win([other]);
   assert.ok(r.forever.includes(path.join(sys, 'Blizz/World of Warcraft/_forever_')));
   assert.ok(r.forever.includes(path.join(other, 'Games/World of Warcraft/_forever_')));
+  // Where each was found, so install can say so for the ones other accounts could plant.
+  assert.equal(r.origin[path.join(custom, '_forever_')], 'records');
+  assert.equal(r.origin[path.join(sys, 'Blizz/World of Warcraft/_forever_')], 'config');
+  assert.equal(r.origin[path.join(env['ProgramFiles(x86)'], 'World of Warcraft/_forever_')], 'default');
+  assert.equal(r.origin[path.join(other, 'Games/World of Warcraft/_forever_')], 'scan');
+  fs.rmSync(sys, { recursive: true, force: true });
+});
+
+// Any account can create C:\Games\World of Warcraft\_forever_\Interface; without the
+// game next to it, it isn't an install (or the bridge would write the strip key there).
+test('on Windows, a Forever folder without the game in it is not an install', () => {
+  const sys = fs.mkdtempSync(path.join(os.tmpdir(), 'orca-wow-win-'));
+  const env = { ProgramData: path.join(sys, 'ProgramData'), APPDATA: path.join(sys, 'Roaming') };
+  const drive = path.join(sys, 'C');
+  const forever = path.join(drive, 'Games/World of Warcraft/_forever_');
+  fs.mkdirSync(path.join(forever, 'Interface/AddOns'), { recursive: true });
+  fs.mkdirSync(path.join(forever, 'Wow.exe'));
+  let r = findAny({ platform: 'win32', env, drives: [drive] });
+  assert.deepEqual(r.forever, []);
+  assert.deepEqual(r.wowOnly, [path.join(drive, 'Games/World of Warcraft')]);
+  fs.rmSync(path.join(forever, 'Wow.exe'), { recursive: true });
+  touch(path.join(forever, 'Wow-ARM64.exe'));
+  r = findAny({ platform: 'win32', env, drives: [drive] });
+  assert.deepEqual(r.forever, [forever]);
+  assert.equal(r.origin[forever], 'scan');
   fs.rmSync(sys, { recursive: true, force: true });
 });
 

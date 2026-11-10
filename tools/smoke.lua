@@ -5,13 +5,13 @@ package.path = "./tools/?.lua;" .. package.path
 local Stub = dofile("tools/wowstub.lua")
 Stub.slotData.default = snapshot
 
+local ns = {}
 local function check(cond, msg)
-	if not cond then for _, e in ipairs(OrcaWow and OrcaWow.errors or {}) do print("RECORDED ERROR: " .. e.msg) end error("CHECK FAILED: " .. msg, 2) end
+	if not cond then for _, e in ipairs(ns.errors or {}) do print("RECORDED ERROR: " .. e.msg) end error("CHECK FAILED: " .. msg, 2) end
 	print("ok - " .. msg)
 end
 
 -- Load files in TOC order.
-local ns = {}
 for line in io.lines(addonDir .. "/OrcaWow.toc") do
 	line = line:gsub("\r", "")
 	if line ~= "" and not line:match("^#") and line:match("%.lua$") then
@@ -20,7 +20,8 @@ for line in io.lines(addonDir .. "/OrcaWow.toc") do
 		chunk("OrcaWow", ns)
 	end
 end
-check(OrcaWow == ns, "namespace exported")
+-- Other addons must not reach ns (ns.Transport:Send would let them type into agents).
+check(OrcaWow == nil and _G.ns == nil, "namespace not exported")
 
 Stub.Fire("ADDON_LOADED", "OrcaWow")
 check(ns.db and ns.db.session and #ns.db.session == 8, "saved variables initialised")
@@ -788,17 +789,70 @@ do
 	-- Approval in Orca's words, with the same decisions underneath.
 	main:SelectThread(firstThread.id)
 	Snapshot(orcaBridge, { view = { id = firstThread.id, msgs = data.view.msgs, pending = { id = "ap9", kind = "approval", what = "Run a command", detail = "npm test" } } })
-	local labels, byLabel = {}, {}
-	for _, r in ipairs(ns.Transcript.scrollBox._rows) do
-		if r.ed.kind == "option" then table.insert(labels, r.ed.label) byLabel[r.ed.label] = r end
+	local function Options()
+		local labels, byLabel = {}, {}
+		for _, r in ipairs(ns.Transcript.scrollBox._rows) do
+			if r.ed.kind == "option" then table.insert(labels, r.ed.label) byLabel[r.ed.label] = r end
+		end
+		return table.concat(labels, "|"), byLabel
 	end
-	check(table.concat(labels, "|") == "Yes|Yes, don't ask again|No", "approval reads Yes / Yes, don't ask again / No: " .. table.concat(labels, "|"))
-	byLabel["Yes, don't ask again"].frame:Click()
-	check(ns.Transport:Payload():find("approve\031" .. firstThread.id .. "\031ap9\031acceptForSession", 1, true) ~= nil, "Yes, don't ask again sends acceptForSession")
+	-- No "don't ask again" row on the agent's menu (no `al`): the bridge would refuse
+	-- that press, so no generic button is offered.
+	local got, byLabel = Options()
+	check(got == "Yes|No", "a menu without the agent's own don't-ask-again row reads Yes / No: " .. got)
+	byLabel["Yes"].frame:Click()
+	check(ns.Transport:Payload():find("approve\031" .. firstThread.id .. "\031ap9\031accept", 1, true) ~= nil, "Yes sends accept")
 	Snapshot(orcaBridge, { view = { id = firstThread.id, msgs = data.view.msgs, pending = { id = "ap10", kind = "approval", what = "Run a command", detail = "rm -rf build", always = true } } })
-	labels = {}
-	for _, r in ipairs(ns.Transcript.scrollBox._rows) do if r.ed.kind == "option" then table.insert(labels, r.ed.label) end end
-	check(table.concat(labels, "|") == "Yes|Yes, don't ask again|Always allow this|No", "Always allow this shows when the request offers it")
+	got = Options()
+	check(got == "Yes|No", "nor Always allow this on an Orca menu without that row: " .. got)
+	-- A yes row that says more than "Yes" (`yl`) is the Yes button's label, word for word.
+	local ylLabel, autoLabel = "Yes, and manually approve edits", "Yes, and auto-accept edits"
+	Snapshot(orcaBridge, { view = { id = firstThread.id, msgs = data.view.msgs, pending = { id = "ap10b", kind = "approval", what = "Change files", detail = "", yl = ylLabel, al = autoLabel } } })
+	got, byLabel = Options()
+	check(got == ylLabel .. "|" .. autoLabel .. "|No", "the Yes button shows the row it presses: " .. got)
+	check(byLabel[ylLabel].ed.primary and byLabel[ylLabel].ed.desc ~= nil and byLabel[ylLabel].ed.height == byLabel["No"].ed.height, "it stays the primary option, one row high, with the whole label in its tooltip")
+	byLabel[ylLabel].frame:Click()
+	local ylCmd = ns.Transport.queue[#ns.Transport.queue]
+	check(ylCmd.verb == "approve" and ylCmd.args[2] == "ap10b" and ylCmd.args[3] == "accept", "and sends accept")
+	-- Requests the game can't approve say why (`pcw`).
+	Snapshot(orcaBridge, { view = { id = firstThread.id, msgs = data.view.msgs, pending = { id = "ap10c", kind = "approval", what = "Run a command", detail = "opencode run", pc = true, pcw = "None of this prompt's options says yes, so the game can't approve it. You can still say No from here." } } })
+	got = Options()
+	local pcNote
+	for _, r in ipairs(ns.Transcript.scrollBox._rows) do if r.ed.text and r.ed.text:find("None of this prompt's options says yes", 1, true) then pcNote = r.ed.text end end
+	check(got == "No" and pcNote ~= nil, "a request without a yes row offers only No and says why: " .. got)
+	-- The agent's own row, word for word (`al`), picks acceptForSession.
+	local alLabel = "Yes, and don't ask again for npm test commands in C:\\src\\app"
+	local alView = { id = firstThread.id, msgs = data.view.msgs, pending = { id = "ap11", kind = "approval", what = "Run a command", detail = "npm test", al = alLabel, always = true } }
+	Snapshot(orcaBridge, { view = alView })
+	got, byLabel = Options()
+	check(got == "Yes|" .. alLabel .. "|No", "the agent's own don't-ask-again label replaces the generic buttons: " .. got)
+	check(byLabel[alLabel].ed.desc ~= nil, "that option says it can allow more than this request")
+	byLabel[alLabel].frame:Click()
+	local sentCmd = ns.Transport.queue[#ns.Transport.queue]
+	check(sentCmd.verb == "approve" and sentCmd.args[2] == "ap11" and sentCmd.args[3] == "acceptForSession", "the agent's own row sends acceptForSession")
+	check(Options() == "", "the request is hidden once answered")
+	-- The bridge refuses it (the menu changed, the screen couldn't be read): ask again.
+	Snapshot(orcaBridge, { view = alView, results = { { id = sentCmd.id, ok = false, msg = "The question changed, so nothing was pressed. Look again." } } })
+	check(Options():find("^Yes|") ~= nil, "a refused approval shows the request again: " .. Options())
+	-- A refused answer to a question shows it again too.
+	local qView = { id = firstThread.id, msgs = data.view.msgs, pending = { id = "q7", kind = "question", questions = { { id = "q1", h = "Pick", q = "Which?", opts = { { l = "One", d = "", v = "1" }, { l = "Two", d = "", v = "2" } } } } } }
+	Snapshot(orcaBridge, { view = qView })
+	got, byLabel = Options()
+	byLabel["One"].frame:Click()
+	sentCmd = ns.Transport.queue[#ns.Transport.queue]
+	check(sentCmd.verb == "answer" and sentCmd.args[2] == "q7" and not Options():find("One", 1, true), "an answered question is hidden: " .. Options())
+	Snapshot(orcaBridge, { view = qView, results = { { id = sentCmd.id, ok = false, msg = "Couldn't read the agent's screen, so nothing was pressed. Try again, or answer it in Orca." } } })
+	check(Options():find("One", 1, true) ~= nil, "a refused answer shows the question again: " .. Options())
+	-- Workspace trust and hooks reviews (`pc`): only No, and a note to answer at the computer.
+	Snapshot(orcaBridge, { view = { id = firstThread.id, msgs = data.view.msgs, pending = { id = "ap12", kind = "approval", what = "Trust this folder", detail = "Do you trust the files in this folder?", pc = true, al = alLabel } } })
+	got, byLabel = Options()
+	check(got == "No", "a wait for the computer offers only No: " .. got)
+	local noteText
+	for _, r in ipairs(ns.Transcript.scrollBox._rows) do if r.ed.text and r.ed.text:find("answer this at the computer", 1, true) then noteText = r.ed.text end end
+	check(noteText ~= nil, "and says to answer it at the computer")
+	byLabel["No"].frame:Click()
+	sentCmd = ns.Transport.queue[#ns.Transport.queue]
+	check(sentCmd.verb == "approve" and sentCmd.args[2] == "ap12" and sentCmd.args[3] == "decline", "No declines it")
 	-- Controller: the bumpers skip the missing Usage tab.
 	local down = f._scripts.OnGamePadButtonDown
 	down(f, "PADRSHOULDER")

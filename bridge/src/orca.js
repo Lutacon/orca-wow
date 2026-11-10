@@ -18,9 +18,11 @@
 //                --text --enter` sends; Orca types it into the agent's prompt box.
 //   interrupt    Escape, the key Orca's own phone app sends for Stop.
 //   approvals    the menu keys Orca's phone app sends: the option's digit to allow,
-//                Escape to deny. "Don't ask again" picks the menu row that says so.
-//   questions    the selector keystrokes Orca's chat card sends (digit per option,
-//                "Type something" row + text for a free answer).
+//                Escape to deny. "Don't ask again" picks the menu row that says so,
+//                whose label the game shows. The menu is read again first and must
+//                be the one the player saw; nothing is pressed when it can't be read.
+//   questions    the selector keystrokes Orca's chat card sends (the option's
+//                on-screen digit, "Type something" row + text for a free answer).
 //   settle       worktree.set workspaceStatus 'completed' (Orca's Done column) + read
 //   unsettle     worktree.set workspaceStatus 'in-progress'
 //   archive      worktree.sleep (stops the worktree's agents; Orca can resume them)
@@ -40,6 +42,36 @@ const RUNTIME_FILE = 'orca-runtime.json';
 const MAX_FRAME = 1024 * 1024;
 const CLIENT = { id: 'wow-bridge', type: 'desktop' };
 const NOT_RUNNING = "Orca isn't running";
+// A prompt that starts with "!" runs a shell command in Claude Code (and Codex) with
+// no approval. Other addons share the game's Lua state and can queue messages, so the
+// game can't send those unless config.orca.allowShell is on (`orca-wow shell on`).
+// Every line counts (after leading spaces), since a line break can reach the prompt
+// box as Enter. "/" (slash commands such as /clear or /compact) stays allowed: those
+// are the agent's own commands, or ones the user wrote, and anything they run still
+// asks for approval the usual way.
+const SHELL_LINE = /^\s*!/;
+const LINE_BREAK = /[\n\u2028\u2029]/;
+export const SHELL_REFUSED = 'Messages with a line that starts with "!" run shell commands in the agent, and that\'s off from the game. To allow it, run orca-wow shell on at the computer.';
+
+// Text from the game is typed into a terminal, where control characters are keys: DEL
+// or Ctrl+U could edit the line so a "!" ends up first, and others move the cursor or
+// start escape sequences. Only line breaks and tabs are kept (C0, DEL and C1 go).
+export function gameText(text) {
+  return String(text ?? '').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+}
+
+// Answers to a wait are refused rather than pressed blind.
+const CHANGED = 'The question changed, so nothing was pressed. Look again.';
+const UNREADABLE = "Couldn't read the agent's screen, so nothing was pressed. Try again, or answer it in Orca.";
+const NO_MENU = "Couldn't find the agent's menu on its screen, so nothing was pressed. Answer it in Orca.";
+const NO_YES = "Couldn't tell which option says yes, so nothing was pressed. Answer it in Orca.";
+const NO_ALWAYS = 'That menu has no "don\'t ask again" option, so nothing was pressed. Pick Yes or No.';
+const AT_COMPUTER = "Answer this at the computer: the game can't approve it. You can still say No from here.";
+// Why a request is shown as needing the computer (`pcw` in the snapshot).
+const PC_ONE_LINE = "The game only sees one line of this prompt, so it can't approve it. You can still say No from here.";
+const PC_NEEDS_COMPUTER = 'This prompt needs the computer (signing in, or picking a model). You can still say No from here.';
+const PC_NO_MENU = "The bridge can't find this prompt's options on the agent's screen, so the game can't approve it. You can still say No from here.";
+const PC_NO_YES = "None of this prompt's options says yes, so the game can't approve it. You can still say No from here.";
 const ESC = '\x1b';
 const TAIL_LINES = 40;
 // The pause between selector keystrokes, so each step renders before the next
@@ -68,6 +100,19 @@ export function readRuntime(userDataDir = defaultUserDataDir()) {
   const transport = list.find((t) => t && (t.kind === 'named-pipe' || t.kind === 'unix') && t.endpoint);
   if (!transport || !meta.authToken) throw new Error(`Orca's runtime file has no local transport or token (${file})`);
   return { ...meta, transport };
+}
+
+// Is the process that wrote the runtime file still running? Orca can exit without
+// removing the file, and then anyone could be listening on the pipe it names. EPERM
+// means it runs but as another account (an elevated Orca on Windows), so it counts.
+export function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return true; // older files have no pid: can't tell
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === 'EPERM';
+  }
 }
 
 export class OrcaRpcError extends Error {
@@ -182,6 +227,8 @@ export class LocalTransport {
     } catch (err) {
       throw err.code === 'ENOENT' ? Object.assign(new Error(NOT_RUNNING), { code: 'ENOENT' }) : err;
     }
+    // A file left behind by an Orca that exited: don't connect to whatever has its pipe now.
+    if (!processAlive(Number(runtime.pid))) throw Object.assign(new Error(NOT_RUNNING), { code: 'ENOENT' });
     const pipe = new RpcPipe(runtime.transport.endpoint, runtime.authToken);
     await pipe.open();
     return { conn: pipe, origin: runtime.transport.endpoint, runtimeId: runtime.runtimeId };
@@ -264,65 +311,93 @@ export function parseMenu(lines) {
   return { question, options };
 }
 
+const TYPE_ROW = /^(type something|other\b)/i;
+
+// A menu row's label without the key hint some agents add: "No (esc)", "Yes (y)".
+function rowLabel(label) {
+  return String(label).replace(/\s*\((?:esc|tab|shift\+tab|y|a|n)\)\s*$/i, '');
+}
+
 // The question an agent is showing, in the shape bridge.js renders, plus what we
-// need to answer it with keystrokes.
-function questionFromMenu(menu, fallbackText) {
+// need to answer it with keystrokes. Every option keeps its on-screen number as its
+// value, so the key pressed is the row the player picked. Rows like "Type something"
+// or "Chat about this" are the selector's own and come after the agent's options;
+// one that comes before a real option is one of the agent's and stays an option.
+export function questionFromMenu(menu, fallbackText) {
   let multiSelect = false;
-  let freeRow = null;
-  const options = [];
-  for (const o of menu?.options || []) {
-    let label = o.label.replace(/\s*\((?:esc|y|a|n)\)\s*$/i, '');
+  const rows = (menu?.options || []).map((o) => {
+    let label = rowLabel(o.label);
     if (CHECKBOX.test(label)) {
       multiSelect = true;
       label = label.replace(CHECKBOX, '');
     }
-    if (FREE_TEXT_ROW.test(label)) {
-      freeRow = o.n;
-      continue;
-    }
-    options.push({ label, description: o.description, value: String(o.n) });
-  }
+    return { n: o.n, label, description: o.description };
+  });
+  let firstExtra = rows.length;
+  while (firstExtra > 0 && FREE_TEXT_ROW.test(rows[firstExtra - 1].label)) firstExtra--;
+  const extras = rows.slice(firstExtra);
+  const typeRow = extras.find((r) => TYPE_ROW.test(r.label)) || extras[0];
   return {
     id: 'q1',
     header: 'Question',
     question: menu?.question || fallbackText || 'The agent is asking you something.',
     multiSelect,
     allowCustomAnswer: true,
-    options,
-    freeRow,
+    options: rows.slice(0, firstExtra).map((r) => ({ label: r.label, description: r.description, value: String(r.n) })),
+    freeRow: typeRow ? typeRow.n : null,
   };
 }
 
+// The screen number of the row that takes typed text: the selector's own row, or the
+// one after the last option when the menu doesn't show it.
+function typeRowOf(q) {
+  return q.freeRow ?? Number(q.options.at(-1)?.value || 0) + 1;
+}
+
 // Keystrokes that answer Claude Code's AskUserQuestion selector (ported from Orca's
-// buildAskAnswerKeys, native-chat-ask-answer.ts): a digit picks a row, the row after
-// the options takes typed text, multi-select toggles digits then submits.
-function claudeAnswerKeys(q, sel) {
+// buildAskAnswerKeys, native-chat-ask-answer.ts): a digit picks a row, the type row
+// takes typed text, multi-select toggles digits then submits.
+export function claudeAnswerKeys(q, sel) {
   const keys = [];
-  const typeRow = String(q.freeRow || q.options.length + 1);
+  const typeRow = String(typeRowOf(q));
   if (q.multiSelect) {
-    for (const i of sel.indices) keys.push({ raw: String(i + 1) });
+    for (const i of sel.indices) keys.push({ raw: q.options[i].value });
     if (sel.other) keys.push({ raw: typeRow }, { text: sel.other }, { raw: '\r' });
     keys.push({ raw: '\x1b[C' }, { raw: '\r' });
   } else if (sel.other) {
     const labels = sel.indices.map((i) => q.options[i]?.label).filter(Boolean);
     keys.push({ raw: typeRow }, { text: [...labels, sel.other].join(', ') }, { raw: '\r' });
   } else if (sel.indices.length) {
-    keys.push({ raw: String(sel.indices[0] + 1) });
+    keys.push({ raw: q.options[sel.indices[0]].value });
   }
   return keys;
 }
 
-// Codex commits on the option's digit; a note goes on the free-form row after the
-// options (buildCodexAskAnswerKeys in the same Orca file).
-function codexAnswerKeys(q, sel) {
+// Codex commits on the option's digit; a note goes on the picked row, or on the
+// free-form row (buildCodexAskAnswerKeys in the same Orca file). Down moves one screen
+// row from row 1, so the count comes from screen numbers too.
+export function codexAnswerKeys(q, sel) {
   if (sel.other) {
-    const target = sel.indices[0] ?? q.options.length;
+    const target = sel.indices.length ? Number(q.options[sel.indices[0]].value) : typeRowOf(q);
     const keys = [];
-    for (let i = 0; i < target; i++) keys.push({ raw: '\x1b[B' });
+    for (let i = 1; i < target; i++) keys.push({ raw: '\x1b[B' });
     keys.push({ raw: '\t' }, { text: sel.other }, { raw: '\r' });
     return keys;
   }
-  return sel.indices.length ? [{ raw: String(sel.indices[0] + 1) }] : [];
+  return sel.indices.length ? [{ raw: q.options[sel.indices[0]].value }] : [];
+}
+
+const YES_ROW = /^(yes|allow|approve|proceed|accept|continue|trust|run)\b/i;
+// Rows that allow more than this one request: "don't ask again", session-wide rules,
+// and modes such as "Yes, and auto-accept edits" or "bypass permissions".
+const ALWAYS_ROW = /don'?t ask again|do not ask again|\balways\b|this session|allow all|for the session|auto-?accept|\bbypass\b/i;
+
+// An approval menu's "yes, once" row and its "don't ask again" row, if it has them.
+export function approvalRows(menu) {
+  const options = menu?.options || [];
+  const always = options.find((o) => ALWAYS_ROW.test(o.label) && !/^(no|deny|reject|cancel)\b/i.test(o.label)) || null;
+  const yes = options.find((o) => o !== always && YES_ROW.test(o.label) && !ALWAYS_ROW.test(o.label)) || null;
+  return { yes, always };
 }
 
 // ---- mapping Orca rows to T3 threads -------------------------------------------
@@ -380,9 +455,17 @@ function requestKind(agent) {
 }
 
 // A wait's identity: it changes whenever the agent enters a new wait, so a stale
-// answer from the game is refused instead of landing on the next menu.
-function requestIdFor(agent) {
-  return 'q' + Math.floor(agent.stateStartedAt || 0).toString(36);
+// answer from the game is refused instead of landing on the next menu. With `seen`
+// (what the player was shown: see seenFor), it also covers the tool, its input and
+// the menu, so an answer only lands on the menu the player saw.
+function requestIdFor(agent, seen) {
+  const base = 'q' + Math.floor(agent.stateStartedAt || 0).toString(36);
+  return seen === undefined ? base : `${base}.${shortHash(JSON.stringify(seen), 10)}`;
+}
+
+function seenFor(agent, menu, reason) {
+  const input = agent.toolInput == null ? '' : typeof agent.toolInput === 'string' ? agent.toolInput : JSON.stringify(agent.toolInput);
+  return [agent.toolName || '', input, reason || '', menu?.question || '', ...(menu?.options || []).map((o) => `${o.n}. ${o.label}`)];
 }
 
 function toolItem(agent, extra) {
@@ -412,12 +495,32 @@ const WAIT_LABELS = {
   'codex-model-migration-prompt': 'Answer a model prompt',
   'agent-sign-in-prompt': 'Sign in again',
 };
+// Waits the game must not approve: Orca shows it one line of a prompt that grants a
+// lot (trusting a folder runs its hooks and settings; a hooks review approves them).
+// The game shows them as needing the computer and can still say no.
+const COMPUTER_ONLY = new Set(['agent-trust-workspace', 'codex-trust-workspace', 'agent-hooks-review-prompt', 'codex-hooks-review-prompt']);
+// Waits the game can't answer with Yes: signing in needs a browser, and a model
+// migration prompt picks between models rather than saying yes.
+const NOT_FROM_GAME = new Set(['codex-model-migration-prompt', 'agent-sign-in-prompt']);
 const QUESTION_WAITS = new Set(['agent-interactive-prompt', 'codex-interactive-prompt']);
 
+// Why the game can't approve a wait (it can still say No), or null when it can. This
+// is decided when the request is shown, so the game never offers a Yes the bridge
+// would refuse: a prompt that isn't a numbered menu (OpenCode's, say) or a menu with
+// no row that says yes needs the computer.
+function atComputerWhy(reason, menu) {
+  if (COMPUTER_ONLY.has(reason)) return PC_ONE_LINE;
+  if (NOT_FROM_GAME.has(reason)) return PC_NEEDS_COMPUTER;
+  if (!menu) return PC_NO_MENU;
+  if (!approvalRows(menu).yes) return PC_NO_YES;
+  return null;
+}
+
 export class OrcaClient extends EventEmitter {
-  constructor({ log = () => {}, userDataDir = defaultUserDataDir(), transport = null, pollMs, stateDir = null, keyDelayMs = KEY_DELAY_MS, retryMs = 1000, defaultAgent = 'claude' } = {}) {
+  constructor({ log = () => {}, userDataDir = defaultUserDataDir(), transport = null, pollMs, stateDir = null, keyDelayMs = KEY_DELAY_MS, retryMs = 1000, defaultAgent = 'claude', allowShell = false } = {}) {
     super();
     this.log = log;
+    this.allowShell = allowShell === true;
     this.userDataDir = userDataDir;
     this.transport = transport || new LocalTransport(userDataDir);
     // Quick while an agent works or waits, slower when everything is idle.
@@ -438,7 +541,8 @@ export class OrcaClient extends EventEmitter {
     this.projects = new Map();
     this.refs = new Map(); // threadId -> { worktreeId, paneKey, repoId, row, agent }
     this.memory = new Map(); // threadId -> { runStart, lastDone, state }
-    this.handles = new Map(); // paneKey -> terminal handle (runtime-scoped)
+    this.handles = new Map(); // handleKey(worktreeId, paneKey) -> terminal handle (runtime-scoped)
+    this.keyLocks = new Map(); // handleKey(worktreeId, paneKey) -> the tail of its key sequences
     this.launched = new Map(); // threadId -> a just-started agent Orca doesn't list yet
     this.repos = new Map(); // repoId -> repo
     this.reposAt = 0;
@@ -744,11 +848,16 @@ export class OrcaClient extends EventEmitter {
 
   // The terminal handle of an agent's pane: join terminal.list rows to the paneKey
   // (the join Orca's CLI guide prescribes).
+  // Pane keys (`<tabId>:<leafId>`) are only unique within a worktree, so the cache is
+  // keyed by both.
   async handleFor(ref, refresh = false) {
-    if (!refresh && this.handles.has(ref.paneKey)) return this.handles.get(ref.paneKey);
+    const key = handleKey(ref.worktreeId, ref.paneKey);
+    if (!refresh && this.handles.has(key)) return this.handles.get(key);
     const res = await this.call('terminal.list', { worktree: `id:${ref.worktreeId}`, includePreview: false });
-    for (const t of res?.terminals || []) if (t.tabId && t.leafId && t.handle) this.handles.set(`${t.tabId}:${t.leafId}`, t.handle);
-    return this.handles.get(ref.paneKey) || null;
+    for (const t of res?.terminals || []) {
+      if (t.tabId && t.leafId && t.handle) this.handles.set(handleKey(t.worktreeId || ref.worktreeId, `${t.tabId}:${t.leafId}`), t.handle);
+    }
+    return this.handles.get(key) || null;
   }
 
   async withHandle(ref, fn) {
@@ -759,7 +868,7 @@ export class OrcaClient extends EventEmitter {
       return await fn(handle);
     } catch (err) {
       if (!STALE_HANDLE.has(err?.code)) throw err;
-      this.handles.delete(ref.paneKey);
+      this.handles.delete(handleKey(ref.worktreeId, ref.paneKey));
       const again = await this.handleFor(ref, true);
       if (!again || again === handle) throw err;
       return fn(again);
@@ -784,6 +893,51 @@ export class OrcaClient extends EventEmitter {
       read = s?.terminal || read;
     }
     return read?.tail || [];
+  }
+
+  // A wait as the player sees it, read fresh: the menu, Orca's reason for the wait and
+  // the request id covering both. Read errors other than a stale handle (which
+  // withHandle retries) become "couldn't read": nothing is pressed blind.
+  async readWait(handle, agent) {
+    let lines;
+    let wait;
+    try {
+      lines = await this.screen(handle);
+      wait = (await this.call('terminal.show', { terminal: handle }))?.terminal?.agentWait || null;
+    } catch (err) {
+      if (STALE_HANDLE.has(err?.code)) throw err;
+      this.log(`Orca: couldn't read a waiting agent's terminal: ${err.message}`);
+      throw new Error(UNREADABLE);
+    }
+    const menu = parseMenu(lines);
+    const reason = wait?.reason;
+    return { menu, reason, id: requestIdFor(agent, seenFor(agent, menu, reason)) };
+  }
+
+  // Pass text from the game through gameText first: this only looks at what's typed.
+  checkShell(text) {
+    if (this.allowShell) return;
+    if (String(text ?? '').split(LINE_BREAK).some((line) => SHELL_LINE.test(line))) throw new Error(SHELL_REFUSED);
+  }
+
+  // Answers (several keys) and approvals (read the screen, then press) hold their
+  // pane's key lock, and so does Stop. The bridge doesn't queue Stop behind other
+  // commands for the thread, so this keeps its Escape out of the middle of an answer:
+  // there it would close the selector, and the rest would be typed into the prompt box.
+  async withKeyLock(ref, fn) {
+    const key = handleKey(ref.worktreeId, ref.paneKey);
+    const prev = this.keyLocks.get(key) || Promise.resolve();
+    let release;
+    const held = new Promise((r) => (release = r));
+    const tail = prev.then(() => held);
+    this.keyLocks.set(key, tail);
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.keyLocks.get(key) === tail) this.keyLocks.delete(key);
+    }
   }
 
   // ---- reads ---------------------------------------------------------------
@@ -829,21 +983,31 @@ export class OrcaClient extends EventEmitter {
     }
     if (working && a.toolName) proj.turnItems.push(toolItem(a, { runId, status: 'running', nodeId: `tool-${a.updatedAt}` }));
     if (waiting) {
-      const requestId = requestIdFor(a);
-      const nodeId = `wait-${requestId}`;
       const reason = wait?.reason;
+      const menu = parseMenu(lines);
+      // The same id respondApproval/respondAnswers recompute from the screen before
+      // pressing anything.
+      const requestId = requestIdFor(a, seenFor(a, menu, reason));
+      const nodeId = `wait-${requestId}`;
       let kind = requestKind(a);
       if (QUESTION_WAITS.has(reason)) kind = 'user_input';
       else if (WAIT_LABELS[reason]) kind = 'permission';
       proj.runtimeRequests.push({ id: requestId, status: 'pending', kind, nodeId });
       if (kind === 'user_input') {
-        const { freeRow, ...q } = questionFromMenu(parseMenu(lines), a.toolInput);
+        const { freeRow, ...q } = questionFromMenu(menu, a.toolInput);
         proj.turnItems.push({ type: 'user_input_request', requestId, runId, nodeId, status: 'pending', questions: [q] });
-      } else if (WAIT_LABELS[reason]) {
-        const menu = parseMenu(lines);
-        proj.turnItems.push({ type: 'dynamic_tool', toolName: WAIT_LABELS[reason], input: menu?.question || undefined, runId, nodeId, status: 'pending' });
       } else {
-        proj.turnItems.push(toolItem(a, { runId, nodeId, status: 'pending' }));
+        // `atComputer`: the game may only say No (`pc`), and `atComputerWhy` says why.
+        const why = atComputerWhy(reason, menu);
+        const pc = why ? { atComputer: true, atComputerWhy: why } : {};
+        if (WAIT_LABELS[reason]) {
+          proj.turnItems.push({ type: 'dynamic_tool', toolName: WAIT_LABELS[reason], input: menu?.question || undefined, runId, nodeId, status: 'pending', wait: true, ...pc });
+        } else {
+          // The game shows the exact rows it would press: the yes row's label when it
+          // says more than "Yes", and the "don't ask again" row (null: none).
+          const { yes, always } = approvalRows(menu);
+          proj.turnItems.push(toolItem(a, { runId, nodeId, status: 'pending', yesLabel: yes ? rowLabel(yes.label) : undefined, alwaysLabel: always ? rowLabel(always.label) : null, ...pc }));
+        }
       }
     }
     return proj;
@@ -855,6 +1019,8 @@ export class OrcaClient extends EventEmitter {
     // Claude Code and Codex take typed prompts while they work and queue or steer
     // them themselves, so every mode is the same keystrokes.
     void mode;
+    text = gameText(text);
+    this.checkShell(text);
     const ref = this.ref(threadId);
     if (ref.pending) throw new Error('That agent is still starting. Try again in a moment.');
     const full = withAttachments(text, attachments);
@@ -918,14 +1084,24 @@ export class OrcaClient extends EventEmitter {
     if (!project) throw new Error('That project is gone from Orca.');
     const agent = opts.agent || (AGENT_NAMES[opts.model?.instanceId] ? opts.model.instanceId : this.defaultAgent);
     if (!AGENT_NAMES[agent]) throw new Error(`Orca doesn't know an agent called "${agent}".`);
+    text = gameText(text);
+    this.checkShell(text);
     const prompt = withAttachments(text, attachments);
     const base = { repo: `id:${project.repoId}`, noParent: true, startupAgent: agent, startupPrompt: prompt, launchSource: 'cli' };
     const baseBranch = String(opts.baseBranch || '').trim();
-    if (baseBranch) base.baseBranch = baseBranch;
+    if (baseBranch) {
+      const why = refNameProblem(baseBranch);
+      if (why) throw new Error(`"${baseBranch}" can't be a base branch: ${why}.`);
+      base.baseBranch = baseBranch;
+    }
     // A typed name is used as is (Orca refuses one that's taken, and we say so); a
     // generated one gets a suffix on a collision.
     const typed = String(opts.name || '').trim();
-    if (typed && !/^[\w.\-/]+$/.test(typed)) throw new Error('Worktree names can use letters, digits, ".", "-", "_" and "/".');
+    if (typed) {
+      if (!/^[\w.\-/]+$/.test(typed)) throw new Error('Worktree names can use letters, digits, ".", "-", "_" and "/".');
+      const why = refNameProblem(typed);
+      if (why) throw new Error(`"${typed}" can't be a worktree name: ${why}.`);
+    }
     let name = typed || slugName(opts.title || text);
     if (!typed) base.nameWasGenerated = true;
     let created;
@@ -961,7 +1137,7 @@ export class OrcaClient extends EventEmitter {
     if (!shown?.tabId || !shown?.leafId) return {};
     const paneKey = `${shown.tabId}:${shown.leafId}`;
     const threadId = threadIdFor(worktreeId, paneKey);
-    this.handles.set(paneKey, handle);
+    this.handles.set(handleKey(worktreeId, paneKey), handle);
     if (!this.threads.has(threadId)) {
       // Until Orca lists the agent, show it as starting so the game can open it.
       const now = Date.now();
@@ -983,46 +1159,60 @@ export class OrcaClient extends EventEmitter {
   async interrupt(threadId) {
     const ref = this.ref(threadId);
     if (ref.agent.state !== 'working' && !WAITING.has(ref.agent.state)) throw new Error('nothing is running in that thread');
-    await this.withHandle(ref, async (handle) => {
-      await this.type(handle, ESC);
-      // OpenCode needs a second Escape (Orca's nativeChatStopSendsSecondEscape).
-      if (ref.agent.agentType === 'opencode') {
-        await sleep(Math.max(this.keyDelayMs, 1));
+    await this.withKeyLock(ref, () =>
+      this.withHandle(ref, async (handle) => {
         await this.type(handle, ESC);
-      }
-    });
+        // OpenCode needs a second Escape (Orca's nativeChatStopSendsSecondEscape).
+        if (ref.agent.agentType === 'opencode') {
+          await sleep(Math.max(this.keyDelayMs, 1));
+          await this.type(handle, ESC);
+        }
+      }),
+    );
     this.pollSoon();
   }
 
   // Answer an approval menu the way Orca's phone does: the option's digit, no Enter
-  // (Claude Code and Codex pick on the digit), or Escape to say no. We read the menu
-  // first so "don't ask again" lands on the row that says it, and fall back to a
-  // plain yes when the menu has no such row.
+  // (Claude Code and Codex pick on the digit), or Escape to say no. The menu is read
+  // again first and must be the one the player saw (the request id covers it); "don't
+  // ask again" presses the row whose label the game showed. Nothing is pressed when
+  // the screen or its menu can't be read.
   async respondApproval(threadId, requestId, decision = 'accept') {
     const ref = await this.liveRef(threadId);
     this.checkWait(ref, requestId);
-    await this.withHandle(ref, async (handle) => {
-      if (decision === 'decline' || decision === 'cancel') return this.type(handle, ESC);
-      const menu = parseMenu(await this.screen(handle).catch(() => []));
-      const options = menu?.options || [];
-      const yes = options.find((o) => /^(yes|allow|approve|proceed|accept|continue|trust|run)\b/i.test(o.label));
-      const always = options.find((o) => /don'?t ask again|do not ask again|\balways\b|this session|allow all|for the session/i.test(o.label));
-      const acceptKey = yes ? String(yes.n) : ref.agent.agentType === 'opencode' ? '\r' : '1';
-      const key = decision === 'acceptForSession' || decision === 'acceptAlways' ? (always ? String(always.n) : acceptKey) : acceptKey;
-      return this.type(handle, key);
-    });
+    const no = decision === 'decline' || decision === 'cancel';
+    await this.withKeyLock(ref, () =>
+      this.withHandle(ref, async (handle) => {
+        // Escape only ever says no to this wait (checkWait made sure it's the same
+        // one), so it needs neither the menu nor the exact question the game showed.
+        if (no) return this.type(handle, ESC);
+        const seen = await this.readWait(handle, ref.agent);
+        if (seen.id !== requestId) throw new Error(CHANGED);
+        if (COMPUTER_ONLY.has(seen.reason) || NOT_FROM_GAME.has(seen.reason)) throw new Error(AT_COMPUTER);
+        if (!seen.menu) throw new Error(NO_MENU);
+        const { yes, always } = approvalRows(seen.menu);
+        const forGood = decision === 'acceptForSession' || decision === 'acceptAlways';
+        const row = forGood ? always : yes;
+        if (!row) throw new Error(forGood ? NO_ALWAYS : NO_YES);
+        return this.type(handle, String(row.n));
+      }),
+    );
     this.pollSoon();
   }
 
   // answers: { q1: '2' | ['1', '3'] | 'free text' }. Digits name the options we
-  // offered; anything else is typed into the selector's free-text row.
+  // offered (their on-screen numbers); anything else is typed into the selector's
+  // free-text row. As with approvals, the menu must still be the one the player saw.
   async respondAnswers(threadId, requestId, answers = {}) {
     const ref = await this.liveRef(threadId);
     this.checkWait(ref, requestId);
-    await this.withHandle(ref, async (handle) => {
-      const q = questionFromMenu(parseMenu(await this.screen(handle).catch(() => [])), ref.agent.toolInput);
-      const given = [].concat(answers.q1 ?? Object.values(answers)[0] ?? []).map(String).filter((v) => v.trim());
-      if (!given.length) throw new Error('No answer to send.');
+    const given = [].concat(answers.q1 ?? Object.values(answers)[0] ?? []).map(gameText).filter((v) => v.trim());
+    if (!given.length) throw new Error('No answer to send.');
+    await this.withKeyLock(ref, () => this.withHandle(ref, async (handle) => {
+      const seen = await this.readWait(handle, ref.agent);
+      if (seen.id !== requestId) throw new Error(CHANGED);
+      if (COMPUTER_ONLY.has(seen.reason) || NOT_FROM_GAME.has(seen.reason)) throw new Error(AT_COMPUTER);
+      const q = questionFromMenu(seen.menu, ref.agent.toolInput);
       const indices = [];
       const other = [];
       for (const v of given) {
@@ -1030,6 +1220,7 @@ export class OrcaClient extends EventEmitter {
         if (opt >= 0) indices.push(opt);
         else other.push(v);
       }
+      for (const v of other) this.checkShell(v);
       const sel = { indices, other: other.join(', ') };
       let keys;
       if (!q.options.length) keys = [{ text: sel.other || given.join(', ') }, { raw: '\r' }];
@@ -1038,13 +1229,14 @@ export class OrcaClient extends EventEmitter {
         if (i) await sleep(this.keyDelayMs);
         await this.type(handle, keys[i].raw ?? keys[i].text);
       }
-    });
+    }));
     this.pollSoon();
   }
 
   checkWait(ref, requestId) {
     if (!WAITING.has(ref.agent.state)) throw new Error("The agent isn't waiting for an answer any more.");
-    if (requestId && requestId !== requestIdFor(ref.agent)) throw new Error('That question was already answered.');
+    if (!requestId) throw new Error(CHANGED);
+    if (String(requestId).split('.')[0] !== requestIdFor(ref.agent)) throw new Error('That question was already answered.');
   }
 
   async settle(threadId) {
@@ -1117,6 +1309,27 @@ export class OrcaClient extends EventEmitter {
   environments() {
     return [{ code: '', label: 'Orca', local: true, state: this.state, error: this.error || undefined, threads: this.threads.size }];
   }
+}
+
+function handleKey(worktreeId, paneKey) {
+  return `${worktreeId}\n${paneKey}`;
+}
+
+// Why a name typed in the game can't be a git branch (git check-ref-format's rules),
+// or null. Names go to Orca, which hands them to git; a leading "-" would read as an
+// option there.
+export function refNameProblem(name) {
+  const s = String(name);
+  if (/[\x00-\x20\x7f]/.test(s)) return 'it has spaces or control characters';
+  if (/[~^:?*[\\]/.test(s)) return 'it has one of ~ ^ : ? * [ \\';
+  if (s.startsWith('-')) return 'it starts with "-"';
+  if (s.startsWith('/') || s.endsWith('/')) return 'it starts or ends with "/"';
+  if (s.includes('//')) return 'it has "//"';
+  if (s.includes('..')) return 'it has ".."';
+  if (s.includes('@{') || s === '@') return 'it has "@{"';
+  if (s.endsWith('.')) return 'it ends with "."';
+  if (s.split('/').some((part) => part.startsWith('.') || part.endsWith('.lock'))) return 'a part of it starts with "." or ends with ".lock"';
+  return null;
 }
 
 function withAttachments(text, attachments = []) {

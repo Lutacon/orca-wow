@@ -1,8 +1,15 @@
 -- T3 Code for World of Warcraft: Forever.
 -- Namespace, saved settings, small helpers and an internal event bus.
 
+-- `ns` is deliberately not a global, so another addon or WeakAura can't just call
+-- ns.Transport:Send. That stops casual calls, not a determined addon: every addon
+-- shares this Lua state, and one can load a slot itself and read the link keys from
+-- OrcaWow_Inbox. What the game can make the agents do is limited by the bridge
+-- instead: "!" shell commands are off unless `orca-wow shell on`, approvals must match
+-- the menu on screen, and trust and hooks prompts are answered at the computer.
+-- Key bindings and the addon compartment go through the few OrcaWow_* functions in
+-- Slash.lua.
 local addonName, ns = ...
-OrcaWow = ns
 
 ns.name = addonName
 ns.version = C_AddOns.GetAddOnMetadata(addonName, "Version") or "dev"

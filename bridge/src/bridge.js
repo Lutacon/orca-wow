@@ -101,6 +101,8 @@ export function pendingRequest(projection) {
     detail = item.fileName || '';
   } else if (item?.type === 'command_execution') {
     detail = item.input || item.title || '';
+  } else if (item?.wait && item.atComputer) {
+    detail = item.input || '';
   } else if (item) {
     detail = [item.toolName || item.title, item.input && typeof item.input !== 'string' ? JSON.stringify(item.input) : item.input]
       .filter(Boolean)
@@ -115,13 +117,24 @@ export function pendingRequest(projection) {
     dynamic_tool_call: 'Use a tool',
     auth_refresh: 'Sign in again',
   };
+  // Orca reads the agent's own menu: `alwaysLabel` is its "don't ask again" row (null
+  // when it has none), which the game shows word for word instead of a generic
+  // "Always allow this", and `yesLabel` the row Yes presses, shown when it says more
+  // than "Yes". `atComputer`: a request the game may only decline (`pc`), and why
+  // (`pcw`).
+  const fromMenu = item ? 'alwaysLabel' in item : false;
+  const label = (s) => escapeWow(String(s).slice(0, 200));
   return {
     id: req.id,
     kind: 'approval',
-    what: labels[req.kind] || req.kind,
+    what: item?.wait && item.atComputer ? item.toolName : labels[req.kind] || req.kind,
     detail: escapeWow(String(detail).slice(0, 1200)),
     files,
-    always: req.kind === 'command' || undefined,
+    always: (req.kind === 'command' && !fromMenu) || undefined,
+    yl: item?.yesLabel && !/^yes\.?$/i.test(item.yesLabel) ? label(item.yesLabel) : undefined,
+    al: item?.alwaysLabel ? label(item.alwaysLabel) : undefined,
+    pc: item?.atComputer || undefined,
+    pcw: item?.atComputer && item.atComputerWhy ? escapeWow(item.atComputerWhy) : undefined,
   };
 }
 
@@ -190,6 +203,19 @@ export function parseFrame(payload) {
   return out;
 }
 
+// Which command chain a command joins (see Bridge.enqueueCommand): its thread, or for
+// screenshots the message or new thread they ride along with. null runs it right away.
+// Stop is one Escape the player expects at once, so it doesn't wait behind a message
+// being typed (Orca can hold one for up to 30 s); orca.js still keeps it out of the
+// middle of an answer's keys (withKeyLock).
+const THREAD_VERBS = new Set(['send', 'approve', 'answer', 'model', 'settle', 'unsettle', 'archive', 'read']);
+export function commandQueueKey(cmd) {
+  if (THREAD_VERBS.has(cmd.verb)) return cmd.args[0] ? `t:${cmd.args[0]}` : null;
+  if (cmd.verb === 'shot' || cmd.verb === 'unshot') return cmd.args[0] ? `t:${cmd.args[0]}` : 'new';
+  if (cmd.verb === 'new') return 'new';
+  return null;
+}
+
 // T3 Code's schema errors ("Missing key\n  at [\"reason\"]") mean this bridge and
 // the T3 server disagree about a request; say that, not the raw validator text.
 export function friendlyError(message) {
@@ -215,6 +241,9 @@ export class Bridge {
     this.bank = new SlotBank(addonsDir, { slots: config.slots || 1200 });
     const installed = this.bank.installedSlotCount();
     if (installed > 0) this.bank.slots = installed;
+    // Every write checks it still goes into these folders (see SlotBank.pin).
+    this.bank.pin();
+    this.halted = null; // why publishing stopped for good (a folder was replaced)
     this.capture = new StripCapture({ log: this.log, backend: config.capture?.backend || 'auto', region: config.capture?.region || null });
     // The agents' backend: Orca by default; the original T3 Code backend stays
     // available with `"backend": "t3"` in config.json. `this.t3` keeps its old name:
@@ -237,7 +266,9 @@ export class Bridge {
     this.persist = this.loadState();
     // Keys for the encrypted strip; the addon gets them in every snapshot.
     this.stripKeys = deriveKeys(loadOrCreateKey(stateDir));
-    this.rejected = { forged: 0, plainCommands: 0, loggedAt: 0 };
+    this.rejected = { forged: 0, plainCommands: 0, plainHellos: 0, loggedAt: 0 };
+    this.sealedSeen = false; // the addon has sent an authenticated frame (this run, this game process)
+    this.queues = new Map(); // thread key -> the tail of its command chain
     this.client = null; // what we know about the addon
     this.proc = null;
     this.views = new Map(); // threadId -> { projection, fetchedAt, inflight, again }
@@ -279,7 +310,7 @@ export class Bridge {
     try {
       this.bank.prepareBells();
     } catch (err) {
-      this.log(`couldn't prepare the update bells: ${err.message}`);
+      if (!this.halt(err)) this.log(`couldn't prepare the update bells: ${err.message}`);
     }
     const v = this.voice.describe();
     this.log(`speech: ${v.tts || 'none'}; dictation: ${v.dictation || 'none'}; capture: ${this.capture.resolveBackend()}`);
@@ -293,6 +324,7 @@ export class Bridge {
     this.checkProcess();
     this.procTimer = setInterval(() => this.checkProcess(), 4000);
     this.statusTimer = setInterval(() => this.writeStatus(), 3000);
+    this.waitTimer = setInterval(() => this.recheckWait(), 3000);
     // Pick up new Omarchy usage records (the shell's Agents panel refreshes them).
     this.usageTimer = setInterval(() => this.omarchyUsage.refresh(this.usageInstances()), 60000);
     this.capture.prepare();
@@ -303,6 +335,7 @@ export class Bridge {
     this.stopped = true;
     clearInterval(this.procTimer);
     clearInterval(this.statusTimer);
+    clearInterval(this.waitTimer);
     clearInterval(this.usageTimer);
     clearTimeout(this.publishTimer);
     this.t3.stop();
@@ -329,12 +362,17 @@ export class Bridge {
       // A new client process: its sound cache is empty, so every signal file is
       // reusable. Reset them and start counting again.
       this.log(`WoW client started (pid ${proc.pid}); resetting live-update signals`);
-      this.bank.resetSignals();
+      try {
+        this.bank.resetSignals();
+      } catch (err) {
+        if (!this.halt(err)) this.log(`couldn't reset the update bells: ${err.message}`);
+      }
       this.persist.processKey = key;
       this.persist.sigCounter = 1;
       this.persist.raised = [];
       this.persist.slotGuess = 1;
       this.client = null;
+      this.sealedSeen = false;
       this.saveState();
       this.publishNow('client start');
     } else if (!proc && was) {
@@ -385,12 +423,31 @@ export class Bridge {
         return;
       }
     }
-    const { hello, commands } = parseFrame(payload);
-    if (!hello || hello.proto !== 1) return;
+    const { hello: raw, commands } = parseFrame(payload);
+    if (!raw || raw.proto !== 1) return;
     if (!sealed && commands.length) {
       this.rejected.plainCommands += commands.length;
       this.noteRejected(`ignored ${commands.length} unencrypted command(s); the addon resends them once it has the keys`);
     }
+    if (sealed) {
+      this.sealedSeen = true;
+    } else if (this.sealedSeen && this.client) {
+      // The addon has our keys this run, so a plaintext frame is either a fresh UI
+      // session that hasn't loaded a slot yet (after /reload the first slot usually
+      // brings the keys, so this is rare) or something else drawing in the corner. It
+      // changes nothing; a new UI session only gets slots 1-3 rewritten with the keys,
+      // at most every 30 s, and then talks to us sealed.
+      this.rejected.plainHellos++;
+      if (raw.ui && raw.ui !== this.client.ui && Date.now() - (this.plainBootstrapAt || 0) > 30000) {
+        this.plainBootstrapAt = Date.now();
+        this.log('an unencrypted hello from a new UI session; rewriting the first slots with the keys');
+        this.publishNow('bootstrap');
+      } else {
+        this.noteRejected('ignored an unencrypted hello; the addon already has the keys');
+      }
+      return;
+    }
+    const hello = this.saneHello(raw);
     let c = this.client;
     if (!c || c.ui !== hello.ui || c.session !== hello.session) {
       this.log(`addon connected (ui ${hello.ui}, slot ${hello.slot}, signal ${hello.sig}, addon ${hello.version})`);
@@ -400,8 +457,9 @@ export class Bridge {
       this.markDirty('important');
     } else if (hello.gen >= this.lastGen) {
       // The addon has applied our latest publish, so its pointers are authoritative.
+      // Its bell comes from our snapshots, so it can't be far past our counter.
       c.slotNext = hello.slot;
-      if (hello.sig > this.persist.sigCounter) this.persist.sigCounter = hello.sig;
+      if (hello.sig > this.persist.sigCounter && hello.sig <= this.persist.sigCounter + 8) this.persist.sigCounter = hello.sig;
     }
     c.encrypted = sealed;
     if (c.flags !== hello.flags) {
@@ -438,9 +496,41 @@ export class Bridge {
     if (fresh.length) {
       this.persist.handled[c.session] = fresh.at(-1).id;
       this.saveState();
-      for (const cmd of fresh) this.runCommand(cmd);
+      for (const cmd of fresh) this.enqueueCommand(cmd);
     }
     if (c.ackedSeq !== frame.seq) this.schedulePublish();
+  }
+
+  // A hello's numbers, kept to what a real addon can send: anything else is dropped
+  // (or clamped) so a bad frame can't stall publishing or burn the slots.
+  saneHello(h) {
+    const int = (v, lo, hi, fallback) => (Number.isInteger(v) && v >= lo && v <= hi ? v : fallback);
+    return {
+      ...h,
+      slot: int(h.slot, 1, this.bank.slots + 1, 1),
+      sig: int(h.sig, 1, 2 ** 31, 1),
+      gen: Number.isFinite(h.gen) ? h.gen : 0,
+      // The addon counts its slot folders; 0 means it found none (or an older addon).
+      slots: int(h.slots, 1, 4096, 0),
+      flags: /^[a-z]{0,16}$/.test(h.flags) ? h.flags : '',
+      view: h.view.length <= 200 ? h.view : '',
+    };
+  }
+
+  // Commands for one thread run one after another, so an answer's keystrokes (500 ms
+  // apart) can't interleave with a message for the same terminal; other threads don't
+  // wait, and neither does Stop (see commandQueueKey). Screenshots queue with the
+  // message or new thread they belong to.
+  enqueueCommand(cmd) {
+    const key = commandQueueKey(cmd);
+    if (!key) return this.runCommand(cmd);
+    const run = (this.queues.get(key) || Promise.resolve()).then(() => this.runCommand(cmd));
+    const done = run.catch(() => {});
+    this.queues.set(key, done);
+    done.then(() => {
+      if (this.queues.get(key) === done) this.queues.delete(key);
+    });
+    return run;
   }
 
   noteRejected(msg) {
@@ -565,6 +655,10 @@ export class Bridge {
       ok = false;
       msg = friendlyError(err.message);
       this.log(`command ${cmd.id} failed: ${err.message}`);
+      // A refused answer usually means the game showed an older version of the
+      // question (with Orca, its id covers the menu on screen). Read it again before
+      // the result goes out, so the game shows the current one and the next try works.
+      if ((cmd.verb === 'approve' || cmd.verb === 'answer') && a0) await this.refreshView(a0, true);
     }
     if (ok !== null) this.results.push({ id: cmd.id, ok, msg: msg ? escapeWow(msg) : undefined });
     if (this.results.length > 12) this.results.splice(0, this.results.length - 12);
@@ -646,7 +740,8 @@ export class Bridge {
     return this.views.get(threadId)?.projection;
   }
 
-  refreshView(threadId, force = false) {
+  // `quiet`: only publish if the request the game would answer changed (recheckWait).
+  refreshView(threadId, force = false, { quiet = false } = {}) {
     let v = this.views.get(threadId);
     if (!v) {
       v = { projection: null, fetchedAt: 0, inflight: null, again: false };
@@ -663,6 +758,7 @@ export class Bridge {
       .then((p) => {
         const prevLabel = activityLabel(v.projection);
         const prevContent = v.contentKey;
+        const prevPending = JSON.stringify(pendingRequest(v.projection) ?? null);
         v.projection = p;
         v.fetchedAt = Date.now();
         // Messages, questions and plans are worth a quick update; a new activity
@@ -670,7 +766,9 @@ export class Bridge {
         const msgs = p.messages || [];
         const last = msgs.at(-1);
         v.contentKey = [msgs.length, last?.text?.length, last?.updatedAt, pendingRequest(p)?.id, proposedPlan(p)?.length, (p.runs || []).filter((r) => r.status === 'queued').length].join('|');
-        if (threadId === this.client?.view) this.markDirty(v.contentKey !== prevContent ? 'view' : 'minor');
+        if (quiet) {
+          if (JSON.stringify(pendingRequest(p) ?? null) !== prevPending) this.markDirty('view');
+        } else if (threadId === this.client?.view) this.markDirty(v.contentKey !== prevContent ? 'view' : 'minor');
         else if (activityLabel(p) !== prevLabel) this.markDirty('minor');
       })
       .catch((err) => this.log(`thread ${threadId.slice(0, 8)}: ${err.message}`))
@@ -688,6 +786,21 @@ export class Bridge {
       }
     }
     return v.inflight;
+  }
+
+  // Orca reports when a wait starts, not what it shows, so the viewed agent's question
+  // can change while its thread doesn't: the agent draws its menu after Orca says it
+  // waits, a screen read failed, or a resized window re-wrapped a row. Since an answer
+  // must match what's on screen, read a waiting agent the player is looking at again
+  // every few seconds, and publish only when its request changed.
+  recheckWait() {
+    const id = this.client?.view;
+    if (!id || this.backend !== 'orca') return null;
+    const t = this.t3.threads.get(id);
+    if (!t || threadStatus(t) !== 'input') return null;
+    const v = this.views.get(id);
+    if (v && (v.inflight || Date.now() - v.fetchedAt < 2500)) return null;
+    return this.refreshView(id, true, { quiet: true });
   }
 
   onT3Change(ev) {
@@ -854,8 +967,8 @@ export class Bridge {
         backend: this.backend,
         t3: t3.state,
         t3err: t3.error ? escapeWow(t3.error) : undefined,
-        server: t3.config?.environment?.serverVersion,
-        host: t3.config?.environment?.label,
+        server: t3.config?.environment?.serverVersion ? escapeWow(String(t3.config.environment.serverVersion)) : undefined,
+        host: t3.config?.environment?.label ? escapeWow(String(t3.config.environment.label)) : undefined,
         tts: voice.tts || undefined,
         dictation: voice.dictation || undefined,
         dictationHint: voice.hint || undefined,
@@ -967,6 +1080,7 @@ export class Bridge {
   }
 
   schedulePublish() {
+    if (this.halted) return;
     const delay = this.nextPublishDelay();
     if (delay === null) return;
     const due = Date.now() + delay;
@@ -981,7 +1095,23 @@ export class Bridge {
     }, delay);
   }
 
+  // A folder the bridge writes into was moved or replaced (FolderChangedError): stop
+  // writing into the game for good, and say so in the log and `orca-wow status`.
+  // Returns whether it halted.
+  halt(err) {
+    if (err?.code !== 'FOLDER_CHANGED') return false;
+    if (!this.halted) {
+      this.halted = err.message;
+      clearTimeout(this.publishTimer);
+      this.publishTimer = null;
+      this.log(err.message);
+      this.writeStatus();
+    }
+    return true;
+  }
+
   publishNow(reason) {
+    if (this.halted) return false;
     if (!this.proc && !reason) return false;
     const snapshot = this.buildSnapshot();
     const digest = createHash('sha1').update(JSON.stringify(snapshot)).digest('hex');
@@ -1044,7 +1174,7 @@ export class Bridge {
         this.persist.slotGuess = predicted + 1;
       }
     } catch (err) {
-      this.log(`publish failed: ${err.message}`);
+      if (!this.halt(err)) this.log(`publish failed: ${err.message}`);
       return false;
     }
     for (const r of this.results) r.sent = true;
@@ -1065,6 +1195,7 @@ export class Bridge {
       pid: process.pid,
       at: new Date().toISOString(),
       backend: this.backend,
+      halted: this.halted || undefined,
       t3: { state: this.t3.state, error: this.t3.error, threads: this.t3.threads.size, origin: this.t3.origin, environments: this.t3.environments() },
       wow: this.proc ? { pid: this.proc.pid } : null,
       capture: { state: this.captureState, backend: this.capture.resolveBackend(), ...this.capture.stats, lastError: this.capture.lastError },
@@ -1073,7 +1204,7 @@ export class Bridge {
         : null,
       slots: { total: this.bank.slots, remaining: this.remainingSlots() },
       signals: { next: this.persist.sigCounter },
-      rejected: { forged: this.rejected.forged, plainCommands: this.rejected.plainCommands },
+      rejected: { forged: this.rejected.forged, plainCommands: this.rejected.plainCommands, plainHellos: this.rejected.plainHellos },
       publishes: this.publishCount || 0,
       voice: this.voice.describe(),
       log: this.logs.slice(-30),

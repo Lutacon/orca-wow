@@ -253,12 +253,30 @@ function T:SubmitAnswers(threadId, pending, customText)
 		end
 	end
 	if #args == 0 then return false end
-	ns.Transport:Send("answer", threadId, pending.id, unpack(args))
-	self.answered = self.answered or {}
-	self.answered[pending.id] = true
-	self:Refresh(true)
+	self:Sent(pending.id, ns.Transport:Send("answer", threadId, pending.id, unpack(args)))
 	return true
 end
+
+-- An answer or approval is on its way: hide the request until the bridge says how
+-- it went. If it refused (the question changed, the screen couldn't be read), the
+-- request shows again so the player can look and answer again.
+T.sentFor = {} -- command id -> request id
+function T:Sent(requestId, cmdId)
+	self.answered = self.answered or {}
+	self.answered[requestId] = true
+	if cmdId then self.sentFor[cmdId] = requestId end
+	self:Refresh(true)
+end
+
+ns:On("CommandResult", function(r)
+	local requestId = r.id and T.sentFor[r.id]
+	if not requestId then return end
+	T.sentFor[r.id] = nil
+	if r.ok == false and T.answered then
+		T.answered[requestId] = nil
+		T:Refresh(true)
+	end
+end)
 
 -- Called by the composer when a question is open and the player types an answer.
 function T:CustomAnswer(text)
@@ -335,32 +353,50 @@ function T:Elements()
 	local p = v.pending
 	if p and not (self.answered and self.answered[p.id]) then
 		if p.kind == "approval" then
-			local body = ns.Color("orange", "The agent wants to " .. p.what:lower() .. ":")
-			if p.files then
-				for _, f in ipairs(p.files) do
-					local delta = ""
-					if f.a or f.d then delta = "  " .. ns.Color("green", "+" .. (f.a or 0)) .. " " .. ns.Color("red", "-" .. (f.d or 0)) end
-					body = body .. "\n" .. ns.Color("white", f.f) .. delta
-				end
-			elseif p.detail ~= "" then
-				body = body .. "\n" .. ns.Color("white", p.detail)
-			end
-			table.insert(list, Note(body, "common-icon-forwardarrow"))
 			local function Approve(decision)
 				return function()
-					ns.Transport:Send("approve", id, p.id, decision)
-					self.answered = self.answered or {}
-					self.answered[p.id] = true
-					self:Refresh(true)
+					self:Sent(p.id, ns.Transport:Send("approve", id, p.id, decision))
 				end
 			end
-			-- Orca relays the agent's own prompt, so use its words; the decisions are the same.
-			table.insert(list, Option(orca and "Yes" or "Approve", Approve("accept"), nil, { primary = true }))
-			table.insert(list, Option(orca and "Yes, don't ask again" or "Approve for this session", Approve("acceptForSession")))
-			if p.always then
-				table.insert(list, Option("Always allow this", Approve("acceptAlways"), "Don't ask again for this command."))
+			if p.pc then
+				-- The game can't approve this (Orca shows it one line of a prompt that grants a
+				-- lot, or the bridge can't find a row that says yes); saying no is still safe.
+				-- `pcw` says why.
+				local body = ns.Color("orange", (p.what or "The agent is asking something") .. ": answer this at the computer.")
+				if p.detail and p.detail ~= "" then body = body .. "\n" .. ns.Color("white", p.detail) end
+				body = body .. "\n" .. ns.Color("grey", p.pcw or "The game only sees one line of this prompt, so it can't approve it. You can still say No from here.")
+				table.insert(list, Note(body, "common-icon-forwardarrow"))
+				table.insert(list, Option("No", Approve("decline")))
+			else
+				local body = ns.Color("orange", "The agent wants to " .. p.what:lower() .. ":")
+				if p.files then
+					for _, f in ipairs(p.files) do
+						local delta = ""
+						if f.a or f.d then delta = "  " .. ns.Color("green", "+" .. (f.a or 0)) .. " " .. ns.Color("red", "-" .. (f.d or 0)) end
+						body = body .. "\n" .. ns.Color("white", f.f) .. delta
+					end
+				elseif p.detail ~= "" then
+					body = body .. "\n" .. ns.Color("white", p.detail)
+				end
+				table.insert(list, Note(body, "common-icon-forwardarrow"))
+				-- Orca relays the agent's own prompt, so use its words; the decisions are the same.
+				-- `al` is the agent's own "don't ask again" row, word for word, so the player
+				-- sees what it grants (it can cover more than this one request). An Orca menu
+				-- without such a row gets no "don't ask again" button: the bridge refuses it.
+				-- `yl` is the row Yes presses, word for word, when it says more than "Yes"; a
+				-- long one is cut on the button, so the tooltip shows it whole.
+				local yesDesc = p.yl and "This picks the agent's own option, shown here word for word." or nil
+				table.insert(list, Option(orca and (p.yl or "Yes") or "Approve", Approve("accept"), yesDesc, { primary = true }))
+				if p.al then
+					table.insert(list, Option(p.al, Approve("acceptForSession"), "This is the agent's own option. It can allow more than this one request."))
+				elseif not orca then
+					table.insert(list, Option("Approve for this session", Approve("acceptForSession")))
+				end
+				if p.always and not p.al and not orca then
+					table.insert(list, Option("Always allow this", Approve("acceptAlways"), "Don't ask again for this command."))
+				end
+				table.insert(list, Option(orca and "No" or "Decline", Approve("decline")))
 			end
-			table.insert(list, Option(orca and "No" or "Decline", Approve("decline")))
 		elseif p.kind == "question" then
 			local req = self.answers[p.id] or {}
 			local custom = false

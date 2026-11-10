@@ -98,10 +98,13 @@ test('the E2EE primitives reproduce Orca\'s legacy and v2 test vectors', () => {
 
 test('access links: the orca:// link, the bare code, and what is refused', () => {
   const key = Buffer.from(nacl.box.keyPair().publicKey).toString('base64');
-  const offer = { v: 2, endpoint: 'ws://192.168.1.20:6768', deviceToken: 'tok-123', publicKeyB64: key, scope: 'runtime' };
+  const offer = { v: 2, endpoint: 'ws://192.168.1.20:6768/', deviceToken: 'tok-123', publicKeyB64: key, scope: 'runtime' };
   const link = encodeAccessLink(offer);
   assert.match(link, /^orca:\/\/pair\?code=[A-Za-z0-9_-]+$/);
   assert.deepEqual(parseAccessLink(link), offer);
+  // The address is kept normalised, so the link's author can't smuggle terminal codes in.
+  assert.equal(parseAccessLink(encodeAccessLink({ ...offer, endpoint: 'WS://192.168.1.20:6768' })).endpoint, 'ws://192.168.1.20:6768/');
+  assert.doesNotMatch(parseAccessLink(encodeAccessLink({ ...offer, endpoint: 'ws://192.168.1.20:6768/\x1b]52;c;eA==\x07\n' })).endpoint, /[\x00-\x1f\x7f]/);
   assert.deepEqual(parseAccessLink(`  ${link}\n`), offer, 'surrounding whitespace from a paste');
   assert.deepEqual(parseAccessLink(link.split('code=')[1]), offer, 'the bare code');
   assert.deepEqual(parseAccessLink(link.replace('?code=', '#')), offer, 'the code in the fragment');
@@ -199,6 +202,70 @@ test('handshake failures say what to do and never show the token', async (t) => 
   const gone = new PairedTransport({ ...mac.secret(), endpoint: `ws://127.0.0.1:${port}`, label: 'MacBook', timeoutMs: 3000 });
   const goneErr = await gone.open().then(() => null, (e) => e);
   assert.equal(gone.describeFailure(goneErr), "Can't reach Orca on MacBook");
+});
+
+test('a host that spoke E2EE v2 never gets the legacy framing again, across restarts', async (t) => {
+  const mac = await macOrca().start();
+  const secretsDir = tempDir();
+  const fleets = [];
+  t.after(async () => {
+    for (const f of fleets) f.stop();
+    await mac.stop();
+    fs.rmSync(secretsDir, { recursive: true, force: true });
+  });
+  const id = remoteIdFor(mac.secret());
+  // A pairing saved before the latch existed: no e2ee, no allowLegacy.
+  saveRemoteSecret({ id, label: 'MacBook', ...mac.secret() }, secretsDir);
+  const remotes = [{ code: 'e1', label: 'MacBook', id, endpoint: mac.endpoint }];
+  const fleet = (logs = []) => {
+    const f = new OrcaFleet({ local: false, secretsDir, pollMs: 40, retryMs: 50, remotes, log: (l) => logs.push(l) });
+    fleets.push(f);
+    f.start();
+    return f;
+  };
+
+  const first = fleet();
+  await waitFor(() => first.envs[0].client.state === 'connected');
+  first.stop();
+  const saved = readRemoteSecret(id, secretsDir);
+  assert.equal(saved.e2ee, 'v2', 'remembered on disk');
+  assert.equal(saved.deviceToken, mac.deviceToken);
+
+  // Now something on the network refuses every v2 hello (close 4001 before the ready).
+  mac.legacyOnly = true;
+  const logs = [];
+  const second = fleet(logs);
+  await waitFor(() => second.envs[0].client.state === 'offline' && mac.hellos.length >= 3);
+  second.stop();
+  // A fresh transport built from the file (as `orca-wow remote list` does) holds too.
+  const probe = new PairedTransport({ ...readRemoteSecret(id, secretsDir), label: 'MacBook' });
+  assert.equal((await probe.open().then(() => null, (e) => e))?.code, 'downgrade');
+  assert.ok(!mac.hellos.includes('legacy'), 'never offered the legacy framing');
+  assert.deepEqual(mac.handshakes, ['v2']);
+});
+
+test('a new pairing gets the legacy framing only when allowed, or when the pinned host itself asks', async (t) => {
+  const old = await macOrca({ legacyOnly: true }).start();
+  const between = await macOrca({ oldV2Auth: true }).start();
+  t.after(() => Promise.all([old.stop(), between.stop()]));
+
+  const strict = new PairedTransport({ ...old.secret(), allowLegacy: false, label: 'Old Mac' });
+  assert.equal((await strict.open().then(() => null, (e) => e))?.code, 'legacy_refused');
+  assert.deepEqual(old.hellos, ['v2'], 'an unauthenticated refusal is not enough');
+
+  const logs = [];
+  const allowed = new PairedTransport({ ...old.secret(), allowLegacy: true, label: 'Old Mac', log: (l) => logs.push(l) });
+  for (let i = 0; i < 2; i++) (await allowed.open()).conn.close();
+  assert.equal(allowed.framing, 'legacy');
+  assert.equal(logs.length, 2, 'every legacy connection is logged');
+
+  // A sealed bad_auth comes from the host the link pins: the fallback is its own choice.
+  const latched = [];
+  const tr = new PairedTransport({ ...between.secret(), allowLegacy: false, label: 'Mac', onLatch: () => latched.push(1) });
+  (await tr.open()).conn.close();
+  assert.equal(tr.framing, 'legacy');
+  assert.deepEqual(between.hellos, ['v2', 'legacy']);
+  assert.equal(latched.length, 0, 'not remembered as a v2 host');
 });
 
 // ---- a whole client over the WebSocket --------------------------------------------
@@ -400,9 +467,10 @@ test('the bridge labels the Mac\'s agents and projects with its name', async (t)
 
 // ---- the CLI ---------------------------------------------------------------------------
 
-function cli(args, env) {
+function cli(args, env, input = '') {
   return new Promise((resolve) => {
-    execFile(process.execPath, [path.join(HERE, '..', 'bin', 'orca-wow.js'), ...args], { env, timeout: 30000 }, (err, stdout, stderr) => resolve({ code: err ? err.code ?? 1 : 0, out: stdout + stderr }));
+    const child = execFile(process.execPath, [path.join(HERE, '..', 'bin', 'orca-wow.js'), ...args], { env, timeout: 30000 }, (err, stdout, stderr) => resolve({ code: err ? err.code ?? 1 : 0, out: stdout + stderr }));
+    child.stdin.end(input);
   });
 }
 
@@ -426,17 +494,20 @@ test('orca-wow remote add/list/remove and local on|off keep secrets out of confi
   assert.match(bad.out, /no longer accepts/);
   assert.ok(!fs.existsSync(path.join(configDir, 'config.json')), 'nothing saved for a refused link');
 
-  const add = await cli(['remote', 'add', 'MacBook', mac.link()], env);
+  // The link comes in on stdin (pasted, or piped from the clipboard), not as an argument.
+  const add = await cli(['remote', 'add', 'MacBook'], env, `${mac.link()}\r\n`);
   assert.equal(add.code, 0, add.out);
   assert.match(add.out, /Connected to Orca 1\.4\.300 on MacBook/);
   const raw = fs.readFileSync(path.join(configDir, 'config.json'), 'utf8');
   const cfg = JSON.parse(raw);
   const id = remoteIdFor(mac.secret());
-  assert.deepEqual(cfg.orca.remotes, [{ code: 'e1', label: 'MacBook', id, endpoint: mac.endpoint }]);
+  assert.deepEqual(cfg.orca.remotes, [{ code: 'e1', label: 'MacBook', id, endpoint: `${mac.endpoint}/` }]);
   assert.ok(!raw.includes(mac.deviceToken) && !raw.includes(mac.publicKeyB64), 'no secrets in config.json');
   const secret = JSON.parse(fs.readFileSync(path.join(configDir, 'remotes', `${id}.json`), 'utf8'));
   assert.equal(secret.deviceToken, mac.deviceToken);
   assert.equal(secret.publicKeyB64, mac.publicKeyB64);
+  assert.equal(secret.e2ee, 'v2', 'the probe recorded that this host speaks E2EE v2');
+  assert.equal(secret.allowLegacy, false);
 
   const list = await cli(['remote', 'list'], env);
   assert.match(list.out, /MacBook.*online \(Orca 1\.4\.300\)/);
@@ -450,5 +521,33 @@ test('orca-wow remote add/list/remove and local on|off keep secrets out of confi
   assert.equal(rm.code, 0, rm.out);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(configDir, 'config.json'), 'utf8')).orca.remotes, []);
   assert.ok(!fs.existsSync(path.join(configDir, 'remotes', `${id}.json`)));
-  assert.match((await cli(['help'], env)).out, /remote add <name> <access link>/);
+  assert.match((await cli(['help'], env)).out, /remote add <name>/);
+});
+
+test('the CLI prints another computer\'s text without terminal control codes', async (t) => {
+  // An Orca (or a link's author) that answers with ESC/OSC sequences: OSC 52 writes the clipboard.
+  const evil = await macOrca({ appVersion: '1.4\x1b]52;c;ZXZpbA==\x07\x1b[2J‮' }).start();
+  const home = tempDir();
+  const env = { ...process.env, LOCALAPPDATA: home, APPDATA: home, XDG_CONFIG_HOME: path.join(home, 'cfg'), XDG_STATE_HOME: path.join(home, 'state'), XDG_DATA_HOME: path.join(home, 'data'), HOME: home, USERPROFILE: home };
+  t.after(async () => {
+    await evil.stop();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const controls = /[\x00-\x09\x0b-\x1f\x7f-\x9f‪-‮]/;
+  const add = await cli(['remote', 'add', 'Evil', evil.link()], env);
+  assert.equal(add.code, 0, add.out);
+  assert.doesNotMatch(add.out.replace(/\r?\n/g, ''), controls);
+  const list = await cli(['remote', 'list'], env);
+  assert.match(list.out, /Evil.*online/);
+  assert.doesNotMatch(list.out.replace(/\r?\n/g, ''), controls);
+  // Refused requests: the host's error text is plain by the time anyone logs or shows it.
+  evil.orca.handlers['repo.list'] = () => {
+    throw new Error('nope\x1b]52;c;ZXZpbA==\x07');
+  };
+  const tr = new PairedTransport({ ...evil.secret(), label: 'Evil' });
+  const { conn, status } = await tr.open();
+  t.after(() => conn.close());
+  assert.doesNotMatch(status.appVersion, controls);
+  const err = await conn.call('repo.list', {}).then(() => null, (e) => e);
+  assert.equal(err?.message, 'nope]52;c;ZXZpbA==');
 });

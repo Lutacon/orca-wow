@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { OrcaClient, readRuntime, parseMenu, threadIdFor, projectIdFor } from '../src/orca.js';
+import { spawnSync } from 'node:child_process';
+import { OrcaClient, readRuntime, parseMenu, threadIdFor, projectIdFor, questionFromMenu, claudeAnswerKeys, codexAnswerKeys, refNameProblem, SHELL_REFUSED } from '../src/orca.js';
 import { threadStatus, isUnread } from '../src/t3.js';
 import { pendingRequest, activityLabel, runSummary } from '../src/bridge.js';
 import { FakeOrca, tempDir, worktreeRow, agentRow } from './support/fake-orca.js';
@@ -202,8 +203,31 @@ test('projection of an approval wait renders as "The agent wants to run…"', as
   assert.equal(req.kind, 'approval');
   assert.equal(req.what, 'Run a command');
   assert.equal(req.detail, 'npm test');
-  assert.equal(req.always, true);
-  assert.equal(req.id, th.pendingRuntimeRequest.id);
+  // The game shows the agent's own "don't ask again" row instead of a generic one.
+  assert.equal(req.al, "Yes, and don't ask again for npm test commands in C:\\src\\app");
+  assert.equal(req.always, undefined);
+  assert.equal(req.pc, undefined);
+  assert.ok(req.id.startsWith(th.pendingRuntimeRequest.id + '.'), 'the id names the wait and what the player saw');
+  assert.ok(!/[\x1e\x1f|~]/.test(req.id), 'the id survives the strip');
+});
+
+test('a workspace-trust wait can only be declined from the game', async (t) => {
+  const { client, orca } = await setup(t, (o) => {
+    o.worktrees = [worktreeRow({ agents: [agentRow({ state: 'blocked' })] })];
+    o.terminals = [{ handle: 'h1', worktreeId: 'repo-1::C:/src/app/fix-login', tabId: 'tab-1', leafId: 'leaf-1' }];
+    o.screens.h1 = ['Do you trust the files in this folder?', '❯ 1. Yes, proceed', '  2. No, exit'];
+    o.waits.h1 = { source: 'hook', reason: 'agent-trust-workspace' };
+  });
+  const th = only(client);
+  const req = pendingRequest(await client.threadProjection(th.id));
+  assert.equal(req.pc, true);
+  assert.equal(req.what, 'Trust this folder');
+  assert.equal(req.detail, 'Do you trust the files in this folder?');
+  await assert.rejects(client.respondApproval(th.id, req.id, 'accept'), /at the computer/);
+  await assert.rejects(client.respondAnswers(th.id, req.id, { q1: '1' }), /at the computer/);
+  assert.equal(orca.callsOf('terminal.send').length, 0);
+  await client.respondApproval(th.id, req.id, 'decline');
+  assert.deepEqual(orca.callsOf('terminal.send').map((s) => s.text), ['\x1b']);
 });
 
 test('projection of a question offers the menu rows', async (t) => {
@@ -277,7 +301,8 @@ test('respondApproval presses the menu key each decision names', async (t) => {
     o.screens.h1 = CLAUDE_MENU;
   });
   const th = only(client);
-  const req = th.pendingRuntimeRequest.id;
+  const shown = async () => pendingRequest(await client.threadProjection(th.id)).id;
+  const req = await shown();
   const sent = () => orca.callsOf('terminal.send').map((s) => s.text);
   await client.respondApproval(th.id, req, 'accept');
   await client.respondApproval(th.id, req, 'acceptForSession');
@@ -285,12 +310,46 @@ test('respondApproval presses the menu key each decision names', async (t) => {
   await client.respondApproval(th.id, req, 'decline');
   assert.deepEqual(sent(), ['1', '2', '2', '\x1b']);
   assert.ok(orca.callsOf('terminal.send').every((s) => s.enter === undefined), 'menu keys go without Enter');
-  // A menu without a "don't ask again" row: accepting for the session is a plain yes.
+  // A menu without a "don't ask again" row: nothing is pressed for "don't ask again".
   orca.screens.h1 = ['Allow fetch of https://example.com?', '❯ 1. Yes', '  2. No'];
-  await client.respondApproval(th.id, req, 'acceptForSession');
-  assert.equal(sent().at(-1), '1');
+  const fetchReq = await shown();
+  await assert.rejects(client.respondApproval(th.id, fetchReq, 'acceptForSession'), /no "don't ask again" option/);
+  assert.equal(sent().length, 4);
   // An answer to an older wait is refused.
   await assert.rejects(client.respondApproval(th.id, 'qold', 'accept'), /already answered/);
+});
+
+test('an approval lands only on the menu the player saw', async (t) => {
+  const { client, orca } = await setup(t, (o) => {
+    o.worktrees = [worktreeRow({ agents: [agentRow({ state: 'blocked', toolName: 'Bash', toolInput: 'npm test' })] })];
+    o.terminals = [{ handle: 'h1', worktreeId: 'repo-1::C:/src/app/fix-login', tabId: 'tab-1', leafId: 'leaf-1' }];
+    o.screens.h1 = CLAUDE_MENU;
+  });
+  const th = only(client);
+  const sent = () => orca.callsOf('terminal.send').map((s) => s.text);
+  const req = pendingRequest(await client.threadProjection(th.id)).id;
+  // Same wait, but the menu now asks something else: refused, nothing pressed.
+  orca.screens.h1 = [' Bash command', '', '   rm -rf build', '', ' Do you want to proceed?', ' ❯ 1. Yes', "   2. Yes, and don't ask again for rm commands", '   3. No (esc)'];
+  await assert.rejects(client.respondApproval(th.id, req, 'accept'), /question changed/);
+  // So did the tool input the game showed.
+  orca.screens.h1 = CLAUDE_MENU;
+  orca.worktrees[0].agents[0].toolInput = 'npm publish';
+  await assert.rejects(client.respondApproval(th.id, req, 'accept'), /question changed/);
+  orca.worktrees[0].agents[0].toolInput = 'npm test';
+  // No id at all is refused too.
+  await assert.rejects(client.respondApproval(th.id, '', 'accept'), /question changed/);
+  // A screen without a menu: nothing is pressed blind.
+  orca.screens.h1 = ['Thinking…'];
+  const bare = pendingRequest(await client.threadProjection(th.id)).id;
+  await assert.rejects(client.respondApproval(th.id, bare, 'accept'), /Couldn't find the agent's menu/);
+  // A screen that can't be read: no yes, but Escape still says no.
+  orca.handlers['terminal.read'] = () => {
+    throw new Error('read failed');
+  };
+  await assert.rejects(client.respondApproval(th.id, bare, 'accept'), /Couldn't read the agent's screen/);
+  assert.deepEqual(sent(), []);
+  await client.respondApproval(th.id, bare, 'decline');
+  assert.deepEqual(sent(), ['\x1b']);
 });
 
 test('respondAnswers picks options by digit or types a free answer', async (t) => {
@@ -300,11 +359,165 @@ test('respondAnswers picks options by digit or types a free answer', async (t) =
     o.screens.h1 = ['Which approach?', '❯ 1. Patch it', '  2. Rewrite', '  3. Type something.'];
   });
   const th = only(client);
-  const req = th.pendingRuntimeRequest.id;
+  const req = pendingRequest(await client.threadProjection(th.id)).id;
   await client.respondAnswers(th.id, req, { q1: '2' });
   assert.deepEqual(orca.callsOf('terminal.send').map((s) => s.text), ['2']);
   await client.respondAnswers(th.id, req, { q1: 'Do both' });
   assert.deepEqual(orca.callsOf('terminal.send').slice(1).map((s) => s.text), ['3', 'Do both', '\r']);
+  // A changed question isn't answered.
+  orca.screens.h1 = ['Which database?', '❯ 1. Postgres', '  2. SQLite', '  3. Type something.'];
+  await assert.rejects(client.respondAnswers(th.id, req, { q1: '2' }), /question changed/);
+  assert.equal(orca.callsOf('terminal.send').length, 4);
+});
+
+test('options keep their on-screen numbers when a free-text-looking row is not last', async (t) => {
+  const menu = parseMenu(['Which approach?', '❯ 1. Patch it', '  2. Other approach: rewrite it', '  3. Rewrite', '  4. Type something.', '  5. Chat about this']);
+  const q = questionFromMenu(menu);
+  assert.deepEqual(q.options.map((o) => [o.value, o.label]), [['1', 'Patch it'], ['2', 'Other approach: rewrite it'], ['3', 'Rewrite']]);
+  assert.equal(q.freeRow, 4, 'text goes on "Type something", not "Chat about this"');
+  const pick = (i, other = '') => ({ indices: i === null ? [] : [i], other });
+  assert.deepEqual(claudeAnswerKeys(q, pick(2)), [{ raw: '3' }]);
+  assert.deepEqual(claudeAnswerKeys(q, pick(null, 'both')), [{ raw: '4' }, { text: 'both' }, { raw: '\r' }]);
+  assert.deepEqual(codexAnswerKeys(q, pick(2)), [{ raw: '3' }]);
+  assert.deepEqual(codexAnswerKeys(q, pick(2, 'carefully')).map((k) => k.raw ?? k.text), ['\x1b[B', '\x1b[B', '\t', 'carefully', '\r']);
+  assert.deepEqual(codexAnswerKeys(q, pick(null, 'both')).map((k) => k.raw ?? k.text), ['\x1b[B', '\x1b[B', '\x1b[B', '\t', 'both', '\r']);
+  // Multi-select toggles the screen numbers too.
+  const multi = questionFromMenu(parseMenu(['Pick any', '❯ 1. [ ] A', '  2. [ ] Other: B', '  3. [ ] C', '  4. Type something']));
+  assert.equal(multi.multiSelect, true);
+  assert.deepEqual(claudeAnswerKeys(multi, { indices: [0, 2], other: '' }).map((k) => k.raw), ['1', '3', '\x1b[C', '\r']);
+  // End to end: the player's "Rewrite" presses 3.
+  const { client, orca } = await setup(t, (o) => {
+    o.worktrees = [worktreeRow({ agents: [agentRow({ state: 'waiting', toolName: 'AskUserQuestion' })] })];
+    o.terminals = [{ handle: 'h1', worktreeId: 'repo-1::C:/src/app/fix-login', tabId: 'tab-1', leafId: 'leaf-1' }];
+    o.screens.h1 = ['Which approach?', '❯ 1. Patch it', '  2. Other approach: rewrite it', '  3. Rewrite', '  4. Type something.'];
+  });
+  const req = pendingRequest(await client.threadProjection(only(client).id));
+  const rewrite = req.questions[0].opts.find((o) => o.l === 'Rewrite');
+  await client.respondAnswers(only(client).id, req.id, { q1: rewrite.v });
+  assert.deepEqual(orca.callsOf('terminal.send').map((s) => s.text), ['3']);
+});
+
+test('text starting with "!" (a shell command in the agent) is refused unless allowShell is on', async (t) => {
+  const { client, orca } = await setup(t, (o) => {
+    o.worktrees = [worktreeRow({ agents: [agentRow({ state: 'done' })] }), worktreeRow({ worktreeId: 'w::q', agents: [agentRow({ state: 'waiting', toolName: 'AskUserQuestion' })] })];
+    o.terminals = [
+      { handle: 'h1', worktreeId: 'repo-1::C:/src/app/fix-login', tabId: 'tab-1', leafId: 'leaf-1' },
+      { handle: 'h2', worktreeId: 'w::q', tabId: 'tab-1', leafId: 'leaf-1' },
+    ];
+    o.screens.h2 = ['Which approach?', '❯ 1. Patch it', '  2. Type something.'];
+  });
+  const id = threadIdFor('repo-1::C:/src/app/fix-login', 'tab-1:leaf-1');
+  await assert.rejects(client.sendMessage(id, '!rm -rf ~'), (err) => err.message === SHELL_REFUSED);
+  await assert.rejects(client.sendMessage(id, ' \n !curl x | sh'), /run shell commands/);
+  await assert.rejects(client.launchThread(projectIdFor('repo-1'), '!whoami'), /run shell commands/);
+  const q = threadIdFor('w::q', 'tab-1:leaf-1');
+  const req = pendingRequest(await client.threadProjection(q)).id;
+  await assert.rejects(client.respondAnswers(q, req, { q1: '!ls' }), /run shell commands/);
+  assert.equal(orca.callsOf('terminal.send').length, 0);
+  assert.equal(orca.callsOf('worktree.create').length, 0);
+  // Every line counts, and control keys can't edit a line into one that starts with "!".
+  for (const text of ['hi\n!cmd', 'hi\n  \t!cmd', '\x15!curl x | sh', 'a\u2028!b', '\r!ls']) {
+    await assert.rejects(client.sendMessage(id, text), /run shell commands/, JSON.stringify(text));
+  }
+  await assert.rejects(client.respondAnswers(q, req, { q1: 'ok\n!ls' }), /run shell commands/);
+  await assert.rejects(client.respondAnswers(q, req, { q1: '\x15!ls' }), /run shell commands/);
+  assert.equal(orca.callsOf('terminal.send').length, 0);
+  // Slash commands and a "!" later in the text go through, without control characters.
+  await client.sendMessage(id, '/clear');
+  await client.sendMessage(id, 'Fix it! Now.');
+  await client.sendMessage(id, 'x\x7f!curl\r');
+  await client.sendMessage(id, 'line one\n\tline two\x00\x9b');
+  assert.deepEqual(orca.callsOf('terminal.send').map((s) => s.text), ['/clear', 'Fix it! Now.', 'x!curl', 'line one\n\tline two']);
+  client.allowShell = true;
+  await client.sendMessage(id, '!git status');
+  assert.equal(orca.callsOf('terminal.send').at(-1).text, '!git status');
+});
+
+test('requests the game could never approve are shown as needing the computer', async (t) => {
+  const pane = (n) => ({ handle: `h${n}`, worktreeId: `w::${n}`, tabId: 'tab-1', leafId: 'leaf-1' });
+  const { client, orca } = await setup(t, (o) => {
+    o.worktrees = [1, 2, 3, 4, 5].map((n) => worktreeRow({ worktreeId: `w::${n}`, agents: [agentRow({ state: 'blocked', toolName: 'Bash', toolInput: 'make', agentType: n === 1 ? 'opencode' : 'claude' })] }));
+    o.terminals = [1, 2, 3, 4, 5].map(pane);
+    // OpenCode draws its own prompt, not a numbered menu.
+    o.screens.h1 = ['Permission required', '  $ make', '', ' Allow once   Allow always   Reject'];
+    // A menu without a row that says yes.
+    o.screens.h2 = ['Which model?', '❯ 1. gpt-5', '  2. Keep the current model'];
+    // Signing in needs the computer, even with a yes row.
+    o.screens.h3 = ['Your session expired.', '❯ 1. Yes, sign in', '  2. No'];
+    o.waits.h3 = { source: 'hook', reason: 'agent-sign-in-prompt' };
+    // Codex's menu: Yes presses a row that says more than "Yes", and the game shows it.
+    o.screens.h4 = ['$ make', '› 1. Yes, proceed (y)', "  2. Yes, and don't ask again for this command (a)", '  3. No (esc)'];
+    // A row that switches on a mode is never the plain Yes.
+    o.screens.h5 = ['Ready to code?', '❯ 1. Yes, and auto-accept edits', '  2. Yes, and manually approve edits', '  3. No, keep planning'];
+  });
+  const id = (n) => threadIdFor(`w::${n}`, 'tab-1:leaf-1');
+  const req = async (n) => pendingRequest(await client.threadProjection(id(n)));
+  for (const [n, why] of [[1, /can't find this prompt's options/], [2, /None of this prompt's options says yes/], [3, /needs the computer/]]) {
+    const r = await req(n);
+    assert.equal(r.pc, true, `agent ${n} needs the computer`);
+    assert.match(r.pcw, why);
+    await assert.rejects(client.respondApproval(id(n), r.id, 'accept'));
+    await client.respondApproval(id(n), r.id, 'decline');
+  }
+  assert.deepEqual(orca.callsOf('terminal.send').map((s) => [s.terminal, s.text]), [['h1', '\x1b'], ['h2', '\x1b'], ['h3', '\x1b']], 'only No was pressed');
+  const codex = await req(4);
+  assert.equal(codex.pc, undefined);
+  assert.equal(codex.yl, 'Yes, proceed');
+  assert.equal(codex.al, "Yes, and don't ask again for this command");
+  const plan = await req(5);
+  assert.equal(plan.yl, 'Yes, and manually approve edits');
+  assert.equal(plan.al, 'Yes, and auto-accept edits');
+  await client.respondApproval(id(5), plan.id, 'accept');
+  assert.equal(orca.callsOf('terminal.send').at(-1).text, '2', 'Yes pressed the row the game showed');
+  // A plain "Yes" row needs no label of its own.
+  orca.screens.h4 = CLAUDE_MENU;
+  assert.equal((await req(4)).yl, undefined);
+});
+
+test("Stop waits for an answer's keys instead of landing between them", async (t) => {
+  const { client, orca } = await setup(t, (o) => {
+    o.worktrees = [worktreeRow({ agents: [agentRow({ state: 'waiting', toolName: 'AskUserQuestion' })] })];
+    o.terminals = [{ handle: 'h1', worktreeId: 'repo-1::C:/src/app/fix-login', tabId: 'tab-1', leafId: 'leaf-1' }];
+    o.screens.h1 = ['Which approach?', '❯ 1. Patch it', '  2. Rewrite', '  3. Type something.'];
+  });
+  client.keyDelayMs = 60;
+  const th = only(client);
+  const req = pendingRequest(await client.threadProjection(th.id)).id;
+  const answering = client.respondAnswers(th.id, req, { q1: 'Do both' });
+  await waitFor(() => orca.callsOf('terminal.send').length >= 1);
+  await client.interrupt(th.id);
+  await answering;
+  assert.deepEqual(orca.callsOf('terminal.send').map((s) => s.text), ['3', 'Do both', '\r', '\x1b']);
+});
+
+test('the terminal handle cache tells apart panes with the same key in different worktrees', async (t) => {
+  const { client, orca } = await setup(t, (o) => {
+    o.worktrees = [worktreeRow({ agents: [agentRow({ state: 'done' })] }), worktreeRow({ worktreeId: 'w::two', displayName: 'two', agents: [agentRow({ state: 'done' })] })];
+    o.terminals = [
+      { handle: 'h1', worktreeId: 'repo-1::C:/src/app/fix-login', tabId: 'tab-1', leafId: 'leaf-1' },
+      { handle: 'h2', worktreeId: 'w::two', tabId: 'tab-1', leafId: 'leaf-1' },
+    ];
+  });
+  await client.sendMessage(threadIdFor('repo-1::C:/src/app/fix-login', 'tab-1:leaf-1'), 'one');
+  await client.sendMessage(threadIdFor('w::two', 'tab-1:leaf-1'), 'two');
+  assert.deepEqual(orca.callsOf('terminal.send').map((s) => [s.terminal, s.text]), [['h1', 'one'], ['h2', 'two']]);
+});
+
+test('worktree names and base branches from the game follow git ref rules', async (t) => {
+  for (const bad of ['-rf', 'a..b', '/abs', 'end/', 'a//b', 'x.lock', 'feat/x.lock', 'a@{1}', 'a b', 'a\tb', 'a~1', 'a^', 'a:b', 'a?', 'a*', 'a[b', 'a\\b', '.hidden', 'feat/.x', 'dot.', '@']) {
+    assert.ok(refNameProblem(bad), `refused: ${JSON.stringify(bad)}`);
+  }
+  for (const good of ['feat/dark-mode', 'v1.2', 'fix_login', 'release/2026.11', 'a-b']) assert.equal(refNameProblem(good), null, good);
+  const { client, orca } = await setup(t, (o) => {
+    o.worktrees = [];
+  });
+  await assert.rejects(client.launchThread(projectIdFor('repo-1'), 'x', [], { name: '-x' }), /can't be a worktree name: it starts with "-"/);
+  await assert.rejects(client.launchThread(projectIdFor('repo-1'), 'x', [], { name: 'a/../b' }), /".."/);
+  await assert.rejects(client.launchThread(projectIdFor('repo-1'), 'x', [], { baseBranch: '--upload-pack=x' }), /can't be a base branch/);
+  await assert.rejects(client.launchThread(projectIdFor('repo-1'), 'x', [], { baseBranch: 'main@{1}' }), /can't be a base branch/);
+  assert.equal(orca.callsOf('worktree.create').length, 0);
+  await client.launchThread(projectIdFor('repo-1'), 'x', [], { name: 'feat/x', baseBranch: 'origin/main' });
+  assert.equal(orca.callsOf('worktree.create').length, 1);
 });
 
 test('launchThread creates a worktree with the agent and returns its thread id', async (t) => {
@@ -402,6 +615,28 @@ test('a stale runtime file (pipe gone) also reads as not running', async (t) => 
   });
   await waitFor(() => client.state === 'offline');
   assert.equal(client.error, "Orca isn't running");
+});
+
+test("a runtime file left by an Orca that exited isn't connected to, even if its pipe answers", async (t) => {
+  const dir = tempDir();
+  const orca = new FakeOrca({ dir });
+  await orca.start();
+  // Rewrite the file as if a process that has since exited wrote it.
+  const dead = spawnSync(process.execPath, ['-e', '']).pid;
+  const meta = JSON.parse(fs.readFileSync(orca.runtimeFile, 'utf8'));
+  fs.writeFileSync(orca.runtimeFile, JSON.stringify({ ...meta, pid: dead }));
+  const client = new OrcaClient({ userDataDir: dir, retryMs: 50 });
+  client.start();
+  t.after(async () => {
+    client.stop();
+    await orca.stop().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  await waitFor(() => client.state === 'offline');
+  assert.equal(client.error, "Orca isn't running");
+  assert.equal(orca.calls.length, 0, 'nothing was sent to the pipe');
+  orca.writeRuntime(); // Orca running again
+  await waitFor(() => client.state === 'connected');
 });
 
 test('reconnects to a restarted Orca with a new pipe and token, never logging tokens', async (t) => {

@@ -15,13 +15,13 @@
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { OrcaClient, AGENT_CHOICES } from './orca.js';
-import { PairedTransport, readRemoteSecret, DEFAULT_SECRETS_DIR } from './orca-remote.js';
+import { PairedTransport, readRemoteSecret, markRemoteV2, plainText, DEFAULT_SECRETS_DIR } from './orca-remote.js';
 
 const SEP = '~';
 const GONE = 'That agent is gone from Orca.';
 
 export class OrcaFleet extends EventEmitter {
-  constructor({ local = true, localLabel = 'This PC', remotes = [], secretsDir = DEFAULT_SECRETS_DIR, readSecret = (id) => readRemoteSecret(id, secretsDir), log = () => {}, stateDir = null, ...clientOptions } = {}) {
+  constructor({ local = true, localLabel = 'This PC', remotes = [], secretsDir = DEFAULT_SECRETS_DIR, readSecret = (id) => readRemoteSecret(id, secretsDir), markV2 = (id) => markRemoteV2(id, secretsDir), log = () => {}, stateDir = null, ...clientOptions } = {}) {
     super();
     this.log = log;
     this.envs = [];
@@ -40,12 +40,23 @@ export class OrcaFleet extends EventEmitter {
       const secret = readSecret(r.id);
       const env = { code: r.code, id: r.id, label, local: false };
       const tag = `Orca (${label})`;
-      const envLog = (...a) => log(a.join(' ').replace(/^Orca:/, `${tag}:`));
+      // Lines about another computer can carry its text (errors, versions): keep it plain.
+      const envLog = (...a) => log(plainText(a.join(' ').replace(/^Orca:/, `${tag}:`)));
       if (!secret) {
         // Config names it but its secret file is gone: show it, offline, with the fix.
         env.client = new MissingRemote(label);
       } else {
-        const transport = new PairedTransport({ endpoint: secret.endpoint || r.endpoint, deviceToken: secret.deviceToken, publicKeyB64: secret.publicKeyB64, label, timeoutMs: clientOptions.connectTimeoutMs });
+        const transport = new PairedTransport({
+          endpoint: secret.endpoint || r.endpoint,
+          deviceToken: secret.deviceToken,
+          publicKeyB64: secret.publicKeyB64,
+          label,
+          timeoutMs: clientOptions.connectTimeoutMs,
+          e2ee: secret.e2ee,
+          allowLegacy: secret.allowLegacy,
+          onLatch: () => markV2(r.id),
+          log: envLog,
+        });
         // Their archive and screenshot bookkeeping must not mix with this PC's.
         env.client = new OrcaClient({ ...clientOptions, userDataDir: undefined, transport, log: envLog, stateDir: stateDir ? path.join(stateDir, 'remotes', r.id) : null });
       }
@@ -117,7 +128,7 @@ export class OrcaFleet extends EventEmitter {
   wire(env) {
     const c = env.client;
     c.on('state', (s, e) => {
-      if (!env.local) this.log(`Orca (${env.label}): ${s}${e ? ` (${e})` : ''}`);
+      if (!env.local) this.log(plainText(`Orca (${env.label}): ${s}${e ? ` (${e})` : ''}`));
       // Another machine that drops off takes its agents with it until it's back.
       if (s === 'offline' && !env.local && this.hasEnvItems(env)) {
         this.drop(env);
@@ -283,7 +294,7 @@ class MissingRemote extends EventEmitter {
 
   start() {
     this.state = 'offline';
-    this.error = `${this.label}'s pairing is missing from this PC. Run: orca-wow remote add "${this.label}" <access link>`;
+    this.error = `${this.label}'s pairing is missing from this PC. Run orca-wow remote add "${this.label}" and paste a new access link.`;
     this.emit('state', this.state, this.error);
   }
 

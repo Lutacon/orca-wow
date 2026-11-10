@@ -49,7 +49,22 @@ foreach ($part in 'bridge', 'addon') {
 
 $cli = Join-Path $dest 'bridge\bin\orca-wow.js'
 $launcher = Join-Path $root 'orca-wow.cmd'
-Set-Content -Path $launcher -Encoding ascii -Value "@echo off`r`n`"$($node.Source)`" `"$cli`" %*"
+# The launcher is UTF-8 (no byte order mark) and switches cmd to UTF-8 before the line
+# with Node's path, so a path with accented letters survives; % is doubled because
+# batch files expand it. The bridge is found next to the launcher (%~dp0), which cmd
+# fills in itself. The console's code page is put back afterwards.
+$nodePath = $node.Source.Replace('%', '%%')
+$lines = @(
+  '@echo off',
+  'setlocal',
+  'for /f "tokens=2 delims=:" %%c in (''chcp'') do set "orca_cp=%%c"',
+  'chcp 65001 >nul',
+  "`"$nodePath`" `"%~dp0app\bridge\bin\orca-wow.js`" %*",
+  'set "orca_rc=%errorlevel%"',
+  'if defined orca_cp chcp %orca_cp:.=% >nul',
+  'exit /b %orca_rc%'
+)
+[IO.File]::WriteAllText($launcher, ($lines -join "`r`n") + "`r`n", (New-Object Text.UTF8Encoding $false))
 Write-Host "Command: $launcher (add $root to PATH to type just orca-wow)"
 
 & $node.Source $cli install @args

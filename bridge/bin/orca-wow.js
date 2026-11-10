@@ -4,19 +4,20 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Bridge, STATE_DIR, VERSION } from '../src/bridge.js';
 import { CONFIG_DIR, mintToken, readToken, tokenClaims, findT3Cli } from '../src/auth.js';
 import { findWowInstalls, addonsDir as addonsDirOf, findWowProcess } from '../src/wow.js';
-import { SlotBank, ADDON, CTL_LONG } from '../src/slots.js';
+import { SlotBank, ADDON, CTL_LONG, atomicWrite, checkFolder } from '../src/slots.js';
 import { StripCapture, SCREEN_PERMISSION_HELP } from '../src/capture.js';
 import { decodeImage } from '../src/codec.js';
 import { identify, discoverTailscale, mintRemote, revokeRemote, saveToken, readTokenData, tokenFile } from '../src/envs.js';
 import { DATA_DIR, WINDOWS } from '../src/paths.js';
-import { windowsStartup } from '../src/winservice.js';
+import { windowsStartup, NO_RESTART_EXIT } from '../src/winservice.js';
+import { secureAddonFolders, topFolders } from '../src/winacl.js';
 import { readRuntime as readOrcaRuntime } from '../src/orca.js';
-import { parseAccessLink, checkAccessLink, remoteIdFor, saveRemoteSecret, readRemoteSecret, removeRemoteSecret, remoteSecretFile, probeRemote } from '../src/orca-remote.js';
+import { parseAccessLink, checkAccessLink, remoteIdFor, saveRemoteSecret, readRemoteSecret, removeRemoteSecret, remoteSecretFile, probeRemote, markRemoteV2, plainText } from '../src/orca-remote.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BRIDGE_ROOT = path.resolve(HERE, '..');
@@ -64,13 +65,22 @@ function addonSource() {
   throw new Error('could not find the addon sources next to the bridge');
 }
 
-function copyDir(src, dst) {
-  fs.mkdirSync(dst, { recursive: true });
+// A folder in the game we write into: it must be a real folder inside AddOns, never a
+// link someone else planted under our name (see checkFolder).
+function gameFolder(addonsDir, dir) {
+  if (checkFolder(addonsDir, dir)) return;
+  fs.mkdirSync(dir);
+  checkFolder(addonsDir, dir);
+}
+
+// Files are replaced (atomicWrite), not written into, so a link is never followed.
+function copyDir(src, dst, addonsDir) {
+  gameFolder(addonsDir, dst);
   for (const e of fs.readdirSync(src, { withFileTypes: true })) {
     const s = path.join(src, e.name);
     const d = path.join(dst, e.name);
-    if (e.isDirectory()) copyDir(s, d);
-    else fs.copyFileSync(s, d);
+    if (e.isDirectory()) copyDir(s, d, addonsDir);
+    else atomicWrite(d, fs.readFileSync(s));
   }
 }
 
@@ -81,8 +91,14 @@ function resolveWowDir(args, cfg) {
     return dir;
   }
   if (cfg.wowDir && fs.existsSync(cfg.wowDir)) return cfg.wowDir;
-  const { forever, wowOnly, prefixes } = findWowInstalls();
+  const { forever, wowOnly, prefixes, origin = {} } = findWowInstalls();
   if (forever.length > 1) console.log(C.y(`Found several WoW: Forever installs, using the first (pick one with --wow):\n  ${forever.join('\n  ')}`));
+  else if (origin[forever[0]] === 'scan' || origin[forever[0]] === 'records') {
+    // Found by searching the drives, or in Battle.net's product.db (which every account on
+    // a Windows PC can change): say which folder, so a planted one doesn't go unnoticed.
+    const how = origin[forever[0]] === 'scan' ? 'by searching the drives' : "in Battle.net's list of installs";
+    console.log(C.y(`Using the WoW: Forever install found ${how}: ${forever[0]}\nIf that isn't the game you play, run the install again with --wow and your game's folder.`));
+  }
   if (forever.length) return forever[0];
   const where = '\nIf it\'s somewhere else, pass --wow "/path/to/World of Warcraft".';
   if (wowOnly.length) {
@@ -116,6 +132,21 @@ function bridgeCommand() {
     }
   });
   return [(MAC && linked) || process.execPath, path.join(BRIDGE_ROOT, 'bin', 'orca-wow.js'), 'run'];
+}
+
+// Windows: the logon task runs the bridge from the folder this command runs from. Only
+// the copy install.ps1 keeps in %LOCALAPPDATA%\orca-wow\app is safe for that: a clone
+// elsewhere (under C:\, say) may be writable by other accounts on the PC, whose code
+// would then run at your logon.
+function installedCopy() {
+  const real = (p) => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  return path.relative(real(path.join(DATA_DIR, 'bridge')), real(BRIDGE_ROOT)) === '';
 }
 
 const systemd = {
@@ -202,23 +233,74 @@ const service = WINDOWS ? windowsStartup(bridgeCommand) : MAC ? launchd : system
 function syncAddon(addonsDir) {
   const src = addonSource();
   const dst = path.join(addonsDir, ADDON);
-  fs.mkdirSync(dst, { recursive: true });
+  gameFolder(addonsDir, dst);
   for (const e of fs.readdirSync(src, { withFileTypes: true })) {
     if (e.name === 'Signals') continue;
     const s = path.join(src, e.name);
     const d = path.join(dst, e.name);
-    if (e.isDirectory()) copyDir(s, d);
-    else fs.copyFileSync(s, d);
+    if (e.isDirectory()) copyDir(s, d, addonsDir);
+    else atomicWrite(d, fs.readFileSync(s));
   }
   return dst;
 }
 
+// Windows (see winacl.js): what the check of OrcaWow's folders found that the bridge
+// must not work with.
+function folderProblems(r) {
+  return [
+    ...r.links.map((p) => `${p} is a link to another place`),
+    ...r.foreign.map((p) => `${p} was created by another account on this PC`),
+    ...r.errors.map((e) => `${e.path}: ${e.detail}`),
+  ];
+}
+
+// Before writing into the game: replace any OrcaWow folder another account created or
+// changed (its permissions get fixed, but its contents can't be trusted).
+function replaceForeignFolders(addonsDir) {
+  const r = secureAddonFolders(addonsDir, { full: true });
+  if (r.failed || r.noAcl) return;
+  if (r.links.length) throw new Error(`${r.links.join(', ')} ${r.links.length > 1 ? 'are links' : 'is a link'} to another place, so OrcaWow won't write there. Delete ${r.links.length > 1 ? 'them' : 'it'}, then run the install again.`);
+  const tops = topFolders(addonsDir, [...r.foreign, ...r.errors.map((e) => e.path)]);
+  for (const dir of tops) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (fs.existsSync(dir)) throw new Error(`another account on this PC owns ${dir} and keeps you out of it. Ask an administrator to delete that folder, then run the install again.`);
+  }
+  if (tops.length) console.log(`${C.y('!')} Removed ${tops.length} OrcaWow folder${tops.length > 1 ? 's' : ''} another account on this PC had created or changed; fresh copies are going in.`);
+}
+
+// After writing: lock OrcaWow's folders to this account, and say plainly if the game's
+// own folders still let other accounts in.
+function lockAddonFolders(addonsDir, wowDir) {
+  const parents = [addonsDir, path.dirname(addonsDir), wowDir, path.dirname(wowDir)];
+  const r = secureAddonFolders(addonsDir, { parents });
+  if (r.failed) {
+    console.log(`${C.y('!')} Couldn't lock OrcaWow's folders in the game to your account (${r.failed}). Other accounts on this PC may be able to change them.`);
+    return;
+  }
+  if (r.noAcl) {
+    console.log(`${C.y('!')} The game is on a ${r.noAcl} drive, which keeps no file permissions, so OrcaWow's folders in the game can't be locked to your account. Every account on this PC can change them. If other people use this PC, move the game to an NTFS drive.`);
+    return;
+  }
+  const problems = folderProblems(r);
+  if (problems.length) throw new Error(`OrcaWow's folders in the game couldn't be locked to your account:\n  ${problems.join('\n  ')}\nDelete those folders (ask an administrator if Windows refuses), then run the install again.`);
+  console.log(`${C.g('✓')} OrcaWow's folders in the game are locked to your account ${C.d(`(${r.checked} checked)`)}`);
+  if (r.open.length) {
+    console.log(`${C.y('!')} Other accounts on this PC can change these game folders (Blizzard's installer sets them up that way):`);
+    for (const o of r.open) console.log(`    ${o.path} ${C.d(`(${o.who})`)}`);
+    console.log(`  They can't change OrcaWow's own folders now, but they can still add addons of their own, which run in your game, or move OrcaWow's folders aside and put others in their place (the bridge then refuses to start until you run the install again). If other people have accounts on this PC, ask an administrator to remove their write access to ${path.dirname(wowDir)}.`);
+  }
+}
+
 async function cmdInstall(args) {
+  if (WINDOWS && !args['no-service'] && !installedCopy()) {
+    throw new Error(`this copy of orca-wow is in ${BRIDGE_ROOT}, and its logon task would run the bridge from there, where other accounts on this PC may be able to change it. Run install.ps1 instead (powershell -ExecutionPolicy Bypass -File .\\install.ps1 from the repository folder): it copies the bridge to ${path.join(DATA_DIR, 'bridge')}, which only your account can change. Or add --no-service to install just the addon.`);
+  }
   const cfg = readConfig();
   const wowDir = resolveWowDir(args, cfg);
   const addonsDir = addonsDirOf(wowDir);
   console.log(`${C.b('World of Warcraft:')} ${wowDir}`);
   fs.mkdirSync(addonsDir, { recursive: true });
+  if (WINDOWS) replaceForeignFolders(addonsDir);
 
   // The game only discovers new addon folders and sound files when it starts.
   const freshAddon = !fs.existsSync(path.join(addonsDir, ADDON, `${ADDON}.toc`));
@@ -229,9 +311,10 @@ async function cmdInstall(args) {
   const bank = new SlotBank(addonsDir, { slots });
   const had = bank.installedSlotCount();
   const bellsMissing = !fs.existsSync(bank.sigFile(CTL_LONG));
-  const { made, pruned } = bank.install();
+  const { made, pruned, temps } = bank.install();
   if (had > slots) bank.removeSlots(slots);
-  console.log(`${C.g('✓')} ${slots} live-update slots ready ${C.d(`(${made} files written${pruned ? `, ${pruned} unused signal files removed` : ''})`)}`);
+  console.log(`${C.g('✓')} ${slots} live-update slots ready ${C.d(`(${made} files written${pruned ? `, ${pruned} unused signal files removed` : ''}${temps ? `, ${temps} leftover temporary files removed` : ''})`)}`);
+  if (WINDOWS) lockAddonFolders(addonsDir, wowDir);
 
   const { signals: _legacySignals, ...rest } = cfg;
   const next = { ...rest, wowDir, addonsDir, slots };
@@ -342,8 +425,8 @@ ${C.b('In game')}
   /orca selftest            check the link step by step if something seems off
 
 ${C.b('From here')}
-  orca-wow remote add <name> <access link>
-                              show another computer's Orca agents too
+  orca-wow remote add <name>  show another computer's Orca agents too
+                              (paste its access link when asked)
   orca-wow status             what the bridge sees
   rerun the install command   update
   orca-wow uninstall          remove everything`);
@@ -361,6 +444,24 @@ function cmdSync(args) {
 async function cmdRun(args) {
   const cfg = readConfig();
   const addonsDir = cfg.addonsDir || addonsDirOf(resolveWowDir(args, cfg));
+  if (WINDOWS) {
+    // The bridge writes the strip key into the slot folders: first make sure no other
+    // account on this PC can read or change them (see winacl.js).
+    const r = secureAddonFolders(addonsDir);
+    const problems = folderProblems(r);
+    if (problems.length) {
+      const why = `The bridge didn't start: another account on this PC may have changed OrcaWow's folders in the game:\n  ${problems.join('\n  ')}\nRun the install again (install.ps1) to replace them, then restart the game.`;
+      console.error(why);
+      // The logon task doesn't restart this exit code (it would only fail again), and
+      // `orca-wow status` shows why.
+      writeStoppedStatus(why);
+      process.exitCode = NO_RESTART_EXIT;
+      return;
+    }
+    if (r.noAcl) console.log(`The game is on a ${r.noAcl} drive, which keeps no file permissions, so OrcaWow's folders can't be locked to this account.`);
+    else if (r.failed) console.error(`Couldn't check who else can change OrcaWow's folders in the game (${r.failed}).`);
+    else if (r.fixed.length) console.log(`Locked ${r.fixed.length} of OrcaWow's files and folders in the game to this account again.`);
+  }
   const bridge = new Bridge({ addonsDir, config: { ...cfg, verbose: args.verbose || cfg.verbose } });
   const stop = () => {
     bridge.stop();
@@ -369,6 +470,14 @@ async function cmdRun(args) {
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
   await bridge.start();
+}
+
+// What `orca-wow status` shows when the bridge refused to start.
+function writeStoppedStatus(reason) {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(path.join(STATE_DIR, 'status.json'), JSON.stringify({ version: VERSION, pid: process.pid, at: new Date().toISOString(), stopped: reason }, null, 1));
+  } catch {}
 }
 
 function ago(ms) {
@@ -389,17 +498,26 @@ function cmdStatus(args) {
   const age = Date.now() - Date.parse(st.at);
   const alive = age < 10000;
   const ok = (b) => (b ? C.g('●') : C.r('●'));
+  if (st.stopped) {
+    console.log(`${ok(false)} Bridge ${st.version} not running: it refused to start ${ago(age)}.`);
+    console.log(C.y(plainText(st.stopped, { lines: true })));
+    process.exitCode = 1;
+    return;
+  }
   console.log(`${ok(alive)} Bridge ${st.version} ${alive ? `running (pid ${st.pid})` : `not running (last seen ${ago(age)})`}`);
+  if (st.halted) console.log(`${ok(false)} ${C.y(plainText(st.halted))}`);
   const orca = st.backend !== 't3';
   const envs = st.t3.environments || [];
   if (orca && (envs.length > 1 || envs.some((e) => !e.local))) {
     // One line per Orca: this PC's and each paired with `orca-wow remote add`.
+    // Errors and addresses can carry another computer's text: print it plain.
     for (const e of envs) {
-      const where = e.local ? 'this PC' : e.origin || 'remote';
-      console.log(`${ok(e.state === 'connected')} Orca ${e.local ? '' : `on ${e.label}`}${e.local ? `(${e.label})` : ''}: ${e.state}${e.error ? ` — ${e.error}` : ''} ${C.d(`(${e.threads} agents, ${where})`)}`);
+      const where = e.local ? 'this PC' : plainText(e.origin || 'remote');
+      const label = plainText(e.label);
+      console.log(`${ok(e.state === 'connected')} Orca ${e.local ? '' : `on ${label}`}${e.local ? `(${label})` : ''}: ${plainText(e.state)}${e.error ? ` — ${plainText(e.error)}` : ''} ${C.d(`(${e.threads} agents, ${where})`)}`);
     }
   } else {
-    console.log(`${ok(st.t3.state === 'connected')} ${orca ? 'Orca' : 'T3 Code'}: ${st.t3.state}${st.t3.error ? ` — ${st.t3.error}` : ''} ${C.d(`(${st.t3.threads} ${orca ? 'agents' : 'threads'}, ${st.t3.origin || '?'})`)}`);
+    console.log(`${ok(st.t3.state === 'connected')} ${orca ? 'Orca' : 'T3 Code'}: ${plainText(st.t3.state)}${st.t3.error ? ` — ${plainText(st.t3.error)}` : ''} ${C.d(`(${st.t3.threads} ${orca ? 'agents' : 'threads'}, ${plainText(st.t3.origin || '?')})`)}`);
   }
   if (orca && st.t3.environments && !envs.some((e) => e.local)) console.log(C.d("  This PC's own Orca is hidden (orca-wow local on shows it again)."));
   console.log(`${ok(!!st.wow)} WoW: ${st.wow ? `running (pid ${st.wow.pid})` : 'not running'}`);
@@ -415,7 +533,7 @@ function cmdStatus(args) {
   if (st.voice.hint) console.log(`    ${C.d(st.voice.hint)}`);
   if (args.log || args.v) {
     console.log('');
-    for (const l of st.log) console.log(C.d(l));
+    for (const l of st.log) console.log(C.d(plainText(l)));
   }
 }
 
@@ -524,9 +642,35 @@ async function cmdUninstall(args) {
     if (BIN_LINK && fs.lstatSync(BIN_LINK).isSymbolicLink() && fs.readlinkSync(BIN_LINK).startsWith(DATA_DIR)) fs.rmSync(BIN_LINK);
   } catch {}
   fs.rmSync(DATA_DIR, { recursive: true, force: true });
+  if (WINDOWS) removeLauncher();
   done('Removed the orca-wow command and its files');
 
   if (await findWowProcess()) console.log(`\nWorld of Warcraft is running: ${C.b('/reload')} or restart it to finish unloading OrcaWow.`);
+}
+
+// Windows: the launcher install.ps1 writes, %LOCALAPPDATA%\orca-wow\orca-wow.cmd. This
+// command usually runs from it, and cmd reads a batch file line by line while it runs,
+// so it's deleted a moment after cmd is done with it.
+function removeLauncher() {
+  const launcher = path.join(path.dirname(DATA_DIR), 'orca-wow.cmd');
+  try {
+    if (!fs.lstatSync(launcher).isFile()) return;
+  } catch {
+    return;
+  }
+  const now = () => fs.rmSync(launcher, { force: true });
+  try {
+    const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"ping -n 3 127.0.0.1 >nul & del /f /q "${launcher}""`], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      windowsVerbatimArguments: true,
+    });
+    child.on('error', now);
+    child.unref();
+  } catch {
+    now();
+  }
 }
 
 async function cmdEnv(args) {
@@ -641,8 +785,88 @@ function restartBridge() {
   return false;
 }
 
+// The other computer's version and errors are its text: print them plain.
 function describeProbe(p) {
-  return p.ok ? C.g(`online${p.status?.appVersion ? ` (Orca ${p.status.appVersion}` : ' ('}${p.framing === 'legacy' ? ', older encryption' : ''})`) : C.r(p.error);
+  return p.ok ? C.g(`online${p.status?.appVersion ? ` (Orca ${plainText(p.status.appVersion)}` : ' ('}${p.framing === 'legacy' ? ', older encryption' : ''})`) : C.r(plainText(p.error));
+}
+
+// The access link from stdin, not the command line, where the shell's history file and
+// the process list would keep it: pasted without echo at a terminal, or piped in
+// (Get-Clipboard | orca-wow remote add MacBook).
+async function readLink() {
+  const stdin = process.stdin;
+  if (!stdin.isTTY) {
+    // A pipe that never sends a line or closes would otherwise wait silently forever.
+    process.stderr.write('Reading the access link from standard input…\n');
+    return new Promise((resolve, reject) => {
+      let text = '';
+      const firstLine = () => text.split(/\r?\n/).map((l) => l.trim()).find(Boolean) || '';
+      const finish = (err) => {
+        clearTimeout(timer);
+        stdin.off('data', onData);
+        stdin.off('end', onEnd);
+        stdin.off('error', finish);
+        stdin.destroy();
+        if (err) reject(err);
+        else resolve(firstLine());
+      };
+      const onData = (chunk) => {
+        text += chunk;
+        // The link is the first line; don't wait for the rest of a pipe that stays open.
+        const lineDone = text.split(/\r?\n/).slice(0, -1).some((l) => l.trim());
+        if (lineDone || text.length > 256 * 1024) finish();
+      };
+      const onEnd = () => finish();
+      const timer = setTimeout(() => finish(new Error('No access link arrived on standard input within 60 seconds. Pipe it in (Get-Clipboard | orca-wow remote add <name>), or run the command in a terminal and paste it when asked.')), 60000);
+      stdin.setEncoding('utf8');
+      stdin.on('data', onData);
+      stdin.on('end', onEnd);
+      stdin.on('error', finish);
+      stdin.resume();
+    });
+  }
+  process.stdout.write('Paste the access link (orca://pair?code=...) and press Enter. It stays hidden while you paste: ');
+  if (typeof stdin.setRawMode !== 'function') {
+    const rl = (await import('node:readline/promises')).createInterface({ input: stdin, output: process.stdout });
+    const answer = await rl.question('');
+    rl.close();
+    return answer.trim();
+  }
+  return new Promise((resolve, reject) => {
+    let text = '';
+    let escape = false;
+    const finish = (err) => {
+      stdin.off('data', onData);
+      stdin.setRawMode(false);
+      stdin.pause();
+      process.stdout.write(err ? '\n' : `${text ? `(${text.trim().length} characters)` : ''}\n`);
+      if (err) reject(err);
+      else resolve(text.trim());
+    };
+    const onData = (chunk) => {
+      for (const ch of chunk) {
+        if (escape) {
+          // Skip a key's escape sequence (arrows, bracketed paste markers).
+          if (/[A-Za-z~]/.test(ch)) escape = false;
+        } else if (ch === '\x1b') escape = true;
+        else if (ch === '\r' || ch === '\n') return finish();
+        else if (ch === '\x03' || (ch === '\x04' && !text)) return finish(new Error('Cancelled. Nothing was saved.'));
+        else if (ch === '\x7f' || ch === '\b') text = text.slice(0, -1);
+        else if (ch >= ' ' && ch <= '~') text += ch;
+      }
+    };
+    stdin.setEncoding('utf8');
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.on('data', onData);
+  });
+}
+
+function warnLinkInHistory() {
+  const clear = WINDOWS
+    ? 'To remove it from PowerShell\'s history, delete that line from the file that (Get-PSReadLineOption).HistorySavePath names, then close this window.'
+    : 'To remove it: in bash, find its number with `history | tail`, then run `history -d <number>` and `history -w`; in zsh, close this shell, then delete that line from ~/.zsh_history (or $HISTFILE).';
+  console.log(C.y(`! The access link is now in your shell's history, where anything that can read your files can use it. ${clear} Next time, leave the link out: orca-wow remote add <name> asks for it.`));
 }
 
 async function cmdRemote(args) {
@@ -652,24 +876,27 @@ async function cmdRemote(args) {
   if (sub === 'list') {
     console.log(`${C.b('This PC')} ${orca.local === false ? C.d('hidden (orca-wow local on)') : C.d('shown')}`);
     if (!orca.remotes.length) {
-      console.log(C.d(`No other computers yet. Add one with: orca-wow remote add <name> <access link>\n${PAIR_HELP}`));
+      console.log(C.d(`No other computers yet. Add one with orca-wow remote add <name>, and paste its access link when asked.\n${PAIR_HELP}`));
       return;
     }
     const rows = await Promise.all(
       orca.remotes.map(async (r) => {
         const secret = readRemoteSecret(r.id);
-        if (!secret) return [r, { ok: false, error: `its pairing is missing; run orca-wow remote add "${r.label}" <access link>` }];
-        return [r, await probeRemote(secret, { label: r.label, timeoutMs: Number(args.timeout) || 6000 })];
+        if (!secret) return [r, { ok: false, error: `its pairing is missing; run orca-wow remote add "${r.label}" and paste a new access link` }];
+        // A host that answers over E2EE v2 is remembered, so nothing can downgrade it later.
+        return [r, await probeRemote(secret, { label: r.label, timeoutMs: Number(args.timeout) || 6000, onLatch: () => markRemoteV2(r.id) })];
       }),
     );
-    for (const [r, p] of rows) console.log(`${C.b(r.label)} ${describeProbe(p)} ${C.d(`· ${r.endpoint} · ids ${r.code}~`)}`);
+    for (const [r, p] of rows) console.log(`${C.b(plainText(r.label))} ${describeProbe(p)} ${C.d(`· ${plainText(r.endpoint)} · ids ${plainText(r.code)}~`)}`);
     return;
   }
   if (sub === 'add') {
     const name = args._[2];
-    const link = args._[3];
-    if (!name || !link) throw new Error(`usage: orca-wow remote add <name> <access link>\n${PAIR_HELP}`);
+    if (!name) throw new Error(`usage: orca-wow remote add <name> [--allow-legacy] [--no-check], then paste the access link when asked\n${PAIR_HELP}`);
     if (!/^[\w .'-]{1,32}$/.test(name)) throw new Error('Use a short name (letters, digits, spaces, . _ \' -), like MacBook.');
+    let link = args._[3];
+    if (link) warnLinkInHistory();
+    else link = await readLink();
     let offer;
     try {
       offer = parseAccessLink(link);
@@ -680,19 +907,25 @@ async function cmdRemote(args) {
     if (check.error) throw new Error(check.error);
     if (check.warning) console.log(C.y(`! ${check.warning}`));
     const id = remoteIdFor(offer);
-    const secret = { id, label: name, endpoint: offer.endpoint, deviceToken: offer.deviceToken, publicKeyB64: offer.publicKeyB64, scope: offer.scope, pairedDeviceId: offer.pairedDeviceId, addedAt: new Date().toISOString() };
+    // Legacy framing (no replay protection) only when asked for. A host already seen
+    // speaking E2EE v2 stays that way under a new link, unless legacy is asked for.
+    const allowLegacy = !!args['allow-legacy'];
+    const secret = { id, label: name, endpoint: offer.endpoint, deviceToken: offer.deviceToken, publicKeyB64: offer.publicKeyB64, scope: offer.scope, pairedDeviceId: offer.pairedDeviceId, allowLegacy, addedAt: new Date().toISOString() };
+    if (!allowLegacy && readRemoteSecret(id)?.e2ee === 'v2') secret.e2ee = 'v2';
     if (!args['no-check']) {
-      process.stdout.write(`… Connecting to Orca at ${new URL(offer.endpoint).host}\r`);
+      if (process.stdout.isTTY) process.stdout.write(`… Connecting to Orca at ${new URL(offer.endpoint).host}\r`);
       const p = await probeRemote(secret, { label: name, timeoutMs: Number(args.timeout) || 10000 });
-      process.stdout.write('\r\x1b[2K');
+      if (process.stdout.isTTY) process.stdout.write('\r\x1b[2K');
       if (!p.ok) {
         const hints =
           p.code === 'unreachable' || p.code === 'timeout' || p.code === 'closed'
             ? `\nCheck that the other computer is awake with Orca open, on the same network as this PC, and that its firewall lets Orca accept incoming connections (macOS asks the first time; System Settings > Network > Firewall > Options). Nothing was saved; add --no-check to save it anyway.`
             : '\nNothing was saved.';
-        throw new Error(`${p.error}${hints}`);
+        throw new Error(`${plainText(p.error)}${hints}`);
       }
-      console.log(`${C.g('✓')} Connected to Orca${p.status?.appVersion ? ` ${p.status.appVersion}` : ''} on ${name}${p.framing === 'legacy' ? C.d(' (older encryption; update Orca there for E2EE v2)') : ''}`);
+      if (p.framing === 'v2') secret.e2ee = 'v2';
+      console.log(`${C.g('✓')} Connected to Orca${p.status?.appVersion ? ` ${plainText(p.status.appVersion)}` : ''} on ${name}`);
+      if (p.framing === 'legacy') console.log(C.y(`! ${name}'s Orca only speaks the older encryption, which doesn't stop someone on the network from replaying commands. Update Orca there; the bridge switches to E2EE v2 by itself, and for good, once it can.`));
     }
     saveRemoteSecret(secret);
     const existing = orca.remotes.find((r) => r.id === id) || findRemote(orca.remotes, name);
@@ -716,10 +949,12 @@ async function cmdRemote(args) {
     orca.remotes = orca.remotes.filter((x) => x !== r);
     writeConfig(cfg);
     restartBridge();
-    console.log(`${C.g('✓')} Removed ${r.label}. ${C.d("To revoke this PC's access there too: its Orca > Settings > Remote Orca Servers > Shared Server Access.")}`);
+    const label = plainText(r.label);
+    console.log(`${C.g('✓')} Removed ${label} from this PC.`);
+    console.log(C.y(`! Its access link still works until you revoke it on ${label}: in its Orca, Settings > Remote Orca Servers > Shared Server Access.`));
     return;
   }
-  throw new Error('usage: orca-wow remote [list|add <name> <access link>|remove <name>]');
+  throw new Error('usage: orca-wow remote [list|add <name>|remove <name>]');
 }
 
 function cmdLocal(args) {
@@ -738,6 +973,28 @@ function cmdLocal(args) {
   console.log(`${C.g('✓')} This PC's Orca is ${orca.local ? 'shown' : 'hidden'} in game.`);
 }
 
+// Claude Code and Codex run a message that starts with "!" as a shell command, without
+// asking. The bridge refuses those from the game unless they're turned on here.
+function cmdShell(args) {
+  const sub = args._[1];
+  const cfg = readConfig();
+  const orca = orcaConfig(cfg);
+  if (!sub) {
+    console.log(`Messages from the game that start with "!" are ${orca.allowShell === true ? 'sent to the agents' : 'refused'} ${C.d('(orca-wow shell on|off)')}`);
+    return;
+  }
+  if (sub !== 'on' && sub !== 'off') throw new Error('usage: orca-wow shell on|off');
+  orca.allowShell = sub === 'on';
+  writeConfig(cfg);
+  restartBridge();
+  if (orca.allowShell) {
+    console.log(`${C.g('✓')} Messages from the game that start with "!" now go to the agents, which run them as shell commands without asking.`);
+    console.log(C.y('! Other addons in your game could send such messages too. Turn it off again with orca-wow shell off.'));
+  } else {
+    console.log(`${C.g('✓')} Messages from the game that start with "!" are refused again.`);
+  }
+}
+
 function help() {
   console.log(`${C.b('orca-wow')} ${VERSION} — Orca's coding agents inside World of Warcraft: Forever
 
@@ -749,13 +1006,21 @@ function help() {
   orca-wow run [--verbose]
                      Run the bridge in the foreground (the service runs this)
   orca-wow remote [list]  Other computers' Orcas shown in game, and whether they answer
-  orca-wow remote add <name> <access link> [--no-check]
-                     Show another computer's Orca too. The access link (orca://pair?code=...)
-                     comes from that Orca: Settings > Remote Orca Servers > New Link >
-                     Generate Access Link, or \`orca pair --address <its LAN IP>\` there
+  orca-wow remote add <name> [--no-check] [--allow-legacy]
+                     Show another computer's Orca too. Paste its access link
+                     (orca://pair?code=...) when asked, or pipe it in:
+                     Get-Clipboard | orca-wow remote add MacBook (pbpaste on macOS,
+                     wl-paste on Linux).
+                     The link comes from that Orca: Settings > Remote Orca Servers >
+                     New Link > Generate Access Link, or \`orca pair --address <its LAN IP>\`.
+                     --allow-legacy accepts an old Orca's older encryption, which
+                     doesn't stop replayed commands; only use it on a network you trust
   orca-wow remote remove <name>
-                     Stop showing that computer's Orca and forget its pairing
+                     Stop showing that computer's Orca and forget its pairing (then
+                     revoke it there: Settings > Remote Orca Servers > Shared Server Access)
   orca-wow local on|off  Show this PC's own Orca in game too (on by default)
+  orca-wow shell on|off  Let messages from the game that start with "!" reach the agents,
+                     which run them as shell commands without asking (off by default)
   orca-wow env [list]    Other T3 Code machines shown in game (T3 Connect / Tailscale)
   orca-wow env add <host> [--url https://...] [--ssh <ssh host>]
                      Show another machine's threads too (finds it on Tailscale,
@@ -770,13 +1035,17 @@ function help() {
 
 const args = parseArgs(process.argv.slice(2));
 const cmd = args._[0];
-const commands = { env: cmdEnv, remote: cmdRemote, local: cmdLocal, install: cmdInstall, run: cmdRun, status: cmdStatus, sync: cmdSync, probe: cmdProbe, uninstall: cmdUninstall };
+const commands = { env: cmdEnv, remote: cmdRemote, local: cmdLocal, shell: cmdShell, install: cmdInstall, run: cmdRun, status: cmdStatus, sync: cmdSync, probe: cmdProbe, uninstall: cmdUninstall };
 if (!cmd || args.help || !commands[cmd]) {
   help();
   if (cmd && !commands[cmd]) process.exitCode = 1;
 } else {
-  Promise.resolve(commands[cmd](args)).catch((err) => {
-    console.error(C.r(`✗ ${err.message}`));
-    process.exitCode = 1;
-  });
+  // Through a promise, so a synchronous command's error is reported the same way.
+  Promise.resolve()
+    .then(() => commands[cmd](args))
+    .catch((err) => {
+      // Messages can quote another computer's text; keep line breaks, drop control codes.
+      console.error(C.r(`✗ ${plainText(err.message, { lines: true })}`));
+      process.exitCode = 1;
+    });
 }

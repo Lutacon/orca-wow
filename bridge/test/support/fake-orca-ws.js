@@ -14,10 +14,17 @@ import { FakeOrca } from './fake-orca.js';
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
 export class FakeOrcaWs {
-  constructor({ orca = new FakeOrca({ dir: null }), deviceToken = randomBytes(24).toString('base64url'), legacyOnly = false, scope = 'runtime', protocolVersion = 3, minClientVersion = 2, compress = true, port = 0 } = {}) {
+  // legacyOnly: refuses a v2 hello with close 4001, as an older Orca (or anyone on the
+  // network path) does. oldV2Auth: speaks the v2 handshake but answers v2 token auth
+  // with a sealed bad_auth, like Orcas that predate capabilities on it. appVersion:
+  // what status.get reports.
+  constructor({ orca = new FakeOrca({ dir: null }), deviceToken = randomBytes(24).toString('base64url'), legacyOnly = false, oldV2Auth = false, appVersion, scope = 'runtime', protocolVersion = 3, minClientVersion = 2, compress = true, port = 0 } = {}) {
     this.orca = orca;
     this.deviceToken = deviceToken;
     this.legacyOnly = legacyOnly;
+    this.oldV2Auth = oldV2Auth;
+    this.appVersion = appVersion;
+    this.hellos = []; // 'v2' | 'legacy' per hello received, accepted or not
     this.scope = scope;
     this.protocolVersion = protocolVersion;
     this.minClientVersion = minClientVersion;
@@ -191,6 +198,7 @@ export class FakeOrcaWs {
   onHello(conn, data) {
     if (typeof data !== 'string') return this.closeConn(conn, 4001, 'Invalid handshake message');
     const hello = JSON.parse(data);
+    this.hellos.push(hello.v === 2 ? 'v2' : 'legacy');
     const secret = this.keys.secretKey;
     if (hello.type === 'e2ee_hello' && hello.v === 2 && !this.legacyOnly) {
       const clientKey = decodeCanonical(hello.clientPublicKeyB64, 32);
@@ -253,7 +261,7 @@ export class FakeOrcaWs {
 
   onAuth(conn, text) {
     const auth = JSON.parse(text);
-    const shapeOk = auth.type === 'e2ee_auth' && (conn.framing === 'v2' ? auth.v === 2 && auth.transcriptHashB64 === conn.transcriptHashB64 : auth.v === undefined);
+    const shapeOk = auth.type === 'e2ee_auth' && (conn.framing === 'v2' ? !this.oldV2Auth && auth.v === 2 && auth.transcriptHashB64 === conn.transcriptHashB64 : auth.v === undefined);
     if (!shapeOk) {
       this.seal(conn, JSON.stringify({ type: 'e2ee_error', error: { code: 'bad_auth' } }));
       return this.closeConn(conn, 4001, 'Invalid e2ee_auth');
@@ -305,7 +313,8 @@ export class FakeOrcaWs {
   // ---- methods a paired host adds -------------------------------------------------
 
   m_status_get() {
-    return { ...this.orca.m_status_get(), runtimeProtocolVersion: this.protocolVersion, minCompatibleRuntimeClientVersion: this.minClientVersion, deviceScope: this.scope };
+    const own = this.appVersion === undefined ? {} : { appVersion: this.appVersion };
+    return { ...this.orca.m_status_get(), ...own, runtimeProtocolVersion: this.protocolVersion, minCompatibleRuntimeClientVersion: this.minClientVersion, deviceScope: this.scope };
   }
 
   m_clipboard_startImageUpload(params) {

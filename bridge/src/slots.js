@@ -18,6 +18,7 @@
 //
 // Files have to exist when the client starts: the game only indexes them at launch.
 
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { luaAssignment } from './luaser.js';
@@ -68,9 +69,12 @@ const RENAME_TRIES = process.platform === 'win32' ? 40 : 1;
 const RENAME_WAIT_MS = 20;
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
+// The temporary name is random and created exclusively ('wx'), so nothing planted in
+// advance under a guessable name (a link, say) is written through. The rename replaces
+// the directory entry: a link or hard link at `file` is replaced, never written into.
 export function atomicWrite(file, content, { tries = RENAME_TRIES, rename = fs.renameSync } = {}) {
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, content);
+  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+  fs.writeFileSync(tmp, content, { flag: 'wx' });
   for (let i = 1; ; i++) {
     try {
       rename(tmp, file);
@@ -85,11 +89,85 @@ export function atomicWrite(file, content, { tries = RENAME_TRIES, rename = fs.r
   }
 }
 
+// The only names install ever prunes from Signals.
+const SIGNAL_FILE = /^\d{5}\.wav$/;
+// What atomicWrite leaves behind if the bridge dies between its write and its rename.
+const TEMP_FILE = /\.[0-9a-f]{12}\.tmp$/;
+
+// A folder the bridge writes into was moved or replaced since it started.
+export class FolderChangedError extends Error {
+  constructor(dir) {
+    const again = process.platform === 'win32' ? 'run install.ps1 again' : 'run the install again';
+    super(`${dir} was moved or replaced while the bridge was running (on a shared PC, another account may have done it), so the bridge stopped sending updates to the game. To fix it, ${again}, then restart the game.`);
+    this.code = 'FOLDER_CHANGED';
+  }
+}
+
+// A folder's identity: its volume and file id, or null when it's missing. A folder
+// put in place of ours (or a link to one) has another id.
+function folderId(dir) {
+  try {
+    const st = fs.lstatSync(dir, { bigint: true });
+    return `${st.isDirectory() && !st.isSymbolicLink() ? 'd' : 'x'}:${st.dev}:${st.ino}`;
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+// A folder OrcaWow writes into must be a real folder inside the AddOns folder. On
+// Windows, Blizzard lets every account on the PC create folders in AddOns, and a link
+// planted under one of our names (Node reports junctions as symbolic links) would make
+// the install write, or prune, somewhere else. Returns false if `dir` doesn't exist.
+export function checkFolder(addonsDir, dir, base = fs.realpathSync.native(addonsDir)) {
+  let st;
+  try {
+    st = fs.lstatSync(dir);
+  } catch (err) {
+    if (err.code === 'ENOENT') return false;
+    throw err;
+  }
+  const refuse = (what) => new Error(`${dir} is ${what}, so OrcaWow won't write there. Delete it, then run the install again.`);
+  if (st.isSymbolicLink()) throw refuse('a link to another place');
+  if (!st.isDirectory()) throw refuse('not a folder');
+  const rel = path.relative(base, fs.realpathSync.native(dir));
+  if (!rel || rel.split(path.sep)[0] === '..' || path.isAbsolute(rel)) throw refuse(`outside ${addonsDir}`);
+  return true;
+}
+
 export class SlotBank {
   constructor(addonsDir, { slots = 600 } = {}) {
     this.addonsDir = addonsDir;
     this.slots = slots;
     this.sigDir = path.join(addonsDir, ADDON, 'Signals');
+    this.pinned = null; // dir -> folderId, once pin() ran
+  }
+
+  // Remember which folders the bridge writes into (OrcaWow, Signals and every slot), so
+  // each write can check it still writes into the same ones. The bridge checks them at
+  // start (on Windows, that only your account can change them), but the AddOns folder
+  // above them stays writable by every account: another could move one aside while the
+  // bridge runs and put its own folder, or a link, in its place.
+  pin() {
+    this.pinned = new Map();
+    for (const dir of [path.join(this.addonsDir, ADDON), this.sigDir]) this.pinned.set(dir, folderId(dir));
+    for (let i = 1; i <= this.slots; i++) {
+      const dir = path.dirname(this.slotFile(i));
+      this.pinned.set(dir, folderId(dir));
+    }
+  }
+
+  // One lstat per folder; throws FolderChangedError if it isn't the pinned one.
+  checkPinned(dir) {
+    if (!this.pinned) return;
+    const was = this.pinned.get(dir);
+    const now = folderId(dir);
+    if (was === undefined || now !== was || !now?.startsWith('d:')) throw new FolderChangedError(dir);
+  }
+
+  checkSignals() {
+    this.checkPinned(path.join(this.addonsDir, ADDON));
+    this.checkPinned(this.sigDir);
   }
 
   slotFile(i) {
@@ -139,23 +217,39 @@ export class SlotBank {
 
   // Create every slot and bell that doesn't exist yet, refresh slot TOCs that differ,
   // and remove signal files older versions created but nothing uses. Returns counts.
+  //
+  // Every folder it writes into must be a real folder inside the AddOns folder (see
+  // checkFolder), and files are replaced with atomicWrite, so a link planted under one
+  // of our names is never written through or pruned through.
   install() {
     let made = 0;
     let kept = 0;
+    const base = fs.realpathSync.native(this.addonsDir);
+    const folder = (dir) => {
+      if (checkFolder(this.addonsDir, dir, base)) return;
+      fs.mkdirSync(dir);
+      checkFolder(this.addonsDir, dir, base);
+    };
     const ensure = (file, content, { refresh = false } = {}) => {
-      if (fs.existsSync(file)) {
-        if (refresh && fs.readFileSync(file, 'utf8') !== content) {
-          fs.writeFileSync(file, content);
-          made++;
-        } else kept++;
+      let st = null;
+      try {
+        st = fs.lstatSync(file);
+      } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
+      }
+      if (st && !st.isFile() && !st.isSymbolicLink()) throw new Error(`${file} is not a file, so OrcaWow can't use it. Delete it, then run the install again.`);
+      if (st?.isFile() && !(refresh && fs.readFileSync(file, 'utf8') !== content)) {
+        kept++;
         return;
       }
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, content);
+      atomicWrite(file, content);
       made++;
     };
+    folder(path.join(this.addonsDir, ADDON));
+    folder(this.sigDir);
     for (let i = 1; i <= this.slots; i++) {
       const name = slotName(i);
+      folder(path.join(this.addonsDir, name));
       ensure(path.join(this.addonsDir, name, `${name}.toc`), this.slotToc(), { refresh: true });
       ensure(path.join(this.addonsDir, name, 'Slot.xml'), this.slotXml(), { refresh: true });
       ensure(this.slotFile(i), 'OrcaWow_Inbox = nil\n');
@@ -166,15 +260,28 @@ export class SlotBank {
     ensure(this.sigFile(CTL_EMPTY), '');
     const keep = new Set([...Array(BELLS).keys()].map((i) => sigName(BELL_BASE + i)).concat(sigName(CTL_LONG), sigName(CTL_EMPTY)));
     let pruned = 0;
-    try {
-      for (const f of fs.readdirSync(this.sigDir)) {
-        if (!keep.has(f)) {
-          fs.rmSync(path.join(this.sigDir, f), { force: true });
-          pruned++;
-        }
+    // Removes a regular file only: a link (or anything else) under that name stays.
+    const removeFile = (file) => {
+      try {
+        if (!fs.lstatSync(file).isFile()) return false;
+        fs.rmSync(file, { force: true });
+        return true;
+      } catch {
+        return false;
       }
-    } catch {}
-    return { made, kept, pruned };
+    };
+    for (const f of fs.readdirSync(this.sigDir)) {
+      if (keep.has(f) || !SIGNAL_FILE.test(f)) continue;
+      if (removeFile(path.join(this.sigDir, f))) pruned++;
+    }
+    // Temporary files a bridge that stopped mid-write left behind (atomicWrite's names).
+    let temps = 0;
+    for (const dir of [this.sigDir, ...Array.from({ length: this.slots }, (_, i) => path.join(this.addonsDir, slotName(i + 1)))]) {
+      for (const f of fs.readdirSync(dir)) {
+        if (TEMP_FILE.test(f) && removeFile(path.join(dir, f))) temps++;
+      }
+    }
+    return { made, kept, pruned, temps };
   }
 
   // Remove slot addons beyond `keep` (used by uninstall and when shrinking the bank).
@@ -200,7 +307,9 @@ export class SlotBank {
     const content = luaAssignment('OrcaWow_Inbox', value);
     for (const i of slotIndexes) {
       if (i < 1 || i > this.slots) continue;
-      atomicWrite(this.slotFile(i), content);
+      const file = this.slotFile(i);
+      this.checkPinned(path.dirname(file));
+      atomicWrite(file, content);
     }
     return content.length;
   }
@@ -212,6 +321,7 @@ export class SlotBank {
   // Fill bell k and empty the one four behind it, so the addon's look-ahead window
   // (k .. k+3) only ever sees bells raised after it last loaded.
   raise(k) {
+    this.checkSignals();
     atomicWrite(this.bellFile(k), LONG_SILENT_WAV);
     atomicWrite(this.bellFile(k - 4), '');
     return true;
@@ -219,6 +329,7 @@ export class SlotBank {
 
   // The self-test controls and empty bells; safe to call at every start.
   prepareBells() {
+    this.checkSignals();
     const long = this.sigFile(CTL_LONG);
     try {
       if (fs.statSync(long).size !== LONG_SILENT_WAV.length) atomicWrite(long, LONG_SILENT_WAV);
@@ -230,6 +341,7 @@ export class SlotBank {
 
   // Bells are re-read on every play, so at a client restart we only need them empty.
   resetSignals() {
+    this.checkSignals();
     for (let i = 0; i < BELLS; i++) {
       try {
         atomicWrite(this.sigFile(BELL_BASE + i), '');

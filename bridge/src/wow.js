@@ -118,12 +118,29 @@ function battlenetWowDirs(root) {
   return dirs;
 }
 
-// Sort WoW folders into Forever installs and WoW installs without Forever.
-function classify(wowDirs, forever, wowOnly) {
+// Sort WoW folders into Forever installs and WoW installs without Forever. On Windows a
+// Forever folder must hold the game itself: any account can create a folder with just
+// an Interface folder in it (under C:\Games, say), and the bridge would write the strip
+// key there.
+const CLIENTS = ['Wow.exe', 'Wow-ARM64.exe'];
+function isForeverDir(dir, platform) {
+  if (platform === 'win32') {
+    return CLIENTS.some((f) => {
+      try {
+        return fs.statSync(path.join(dir, f)).isFile();
+      } catch {
+        return false;
+      }
+    });
+  }
+  return [...CLIENTS, 'World of Warcraft.app', 'Interface'].some((f) => fs.existsSync(path.join(dir, f)));
+}
+
+function classify(wowDirs, forever, wowOnly, platform) {
   for (const wow of wowDirs) {
     if (!fs.existsSync(wow)) continue;
     const dir = path.join(wow, FLAVOR);
-    if (['Wow.exe', 'Wow-ARM64.exe', 'World of Warcraft.app', 'Interface'].some((f) => fs.existsSync(path.join(dir, f)))) {
+    if (isForeverDir(dir, platform)) {
       if (!forever.includes(dir)) forever.push(dir);
     } else if (!wowOnly.includes(wow)) {
       wowOnly.push(wow);
@@ -140,7 +157,7 @@ function linuxInstalls() {
       ...battlenetWowDirs(root),
       path.join(root, 'drive_c/Program Files (x86)/World of Warcraft'),
       path.join(root, 'drive_c/Program Files/World of Warcraft'),
-    ], forever, wowOnly);
+    ], forever, wowOnly, 'linux');
   }
   const battlenet = roots.filter((r) => ['drive_c/ProgramData/Battle.net', 'drive_c/Program Files (x86)/Battle.net', 'drive_c/Program Files/Battle.net']
     .some((d) => fs.existsSync(path.join(r, d))));
@@ -166,7 +183,7 @@ function macInstalls(system = '/') {
   dirs.push(sys('Applications/World of Warcraft'), path.join(home, 'Applications/World of Warcraft'));
   const forever = [];
   const wowOnly = [];
-  classify(dirs, forever, wowOnly);
+  classify(dirs, forever, wowOnly, 'darwin');
   const battlenet = [sys('Applications/Battle.net.app'), path.join(home, 'Applications/Battle.net.app'), shared].filter((p) => fs.existsSync(p));
   return { forever, wowOnly, prefixes: battlenet };
 }
@@ -186,41 +203,49 @@ function windowsDrives() {
   return out;
 }
 
+// `origin` says where each Forever folder was found: 'records' (product.db, which every
+// account on the PC can change), 'config' (this account's Battle.net.config), 'default'
+// (Program Files) or 'scan' (the usual folders on every drive).
 function windowsInstalls(env = process.env, drives = windowsDrives()) {
   const dirs = [];
-  const add = (d) => {
+  const from = new Map();
+  const add = (d, source) => {
     if (!d) return;
     const n = path.normalize(d.trim()).replace(/[\\/]+$/, '');
-    if (!dirs.some((x) => x.toLowerCase() === n.toLowerCase())) dirs.push(n);
+    if (dirs.some((x) => x.toLowerCase() === n.toLowerCase())) return;
+    dirs.push(n);
+    from.set(n, source);
   };
   const programData = env.ProgramData || env.PROGRAMDATA || 'C:\\ProgramData';
   const appData = env.APPDATA || path.join(env.USERPROFILE || os.homedir(), 'AppData', 'Roaming');
   try {
     const db = fs.readFileSync(path.join(programData, 'Battle.net', 'Agent', 'product.db'), 'latin1');
-    for (const m of db.matchAll(/[A-Za-z]:[\\/][^\x00-\x1f"]*?World of Warcraft(?=[\x00-\x1f"]|$)/g)) add(Buffer.from(m[0], 'latin1').toString('utf8'));
+    for (const m of db.matchAll(/[A-Za-z]:[\\/][^\x00-\x1f"]*?World of Warcraft(?=[\x00-\x1f"]|$)/g)) add(Buffer.from(m[0], 'latin1').toString('utf8'), 'records');
   } catch {}
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(appData, 'Battle.net', 'Battle.net.config'), 'utf8'));
     const base = cfg?.Client?.Install?.DefaultInstallPath;
-    if (base) add(path.join(base, 'World of Warcraft'));
+    if (base) add(path.join(base, 'World of Warcraft'), 'config');
   } catch {}
-  for (const pf of [env['ProgramFiles(x86)'], env.ProgramFiles]) if (pf) add(path.join(pf, 'World of Warcraft'));
+  for (const pf of [env['ProgramFiles(x86)'], env.ProgramFiles]) if (pf) add(path.join(pf, 'World of Warcraft'), 'default');
   for (const d of drives) {
-    for (const sub of ['Program Files (x86)', 'Program Files', 'Games', 'Juegos', 'Blizzard', '']) add(path.join(d, sub, 'World of Warcraft'));
+    for (const sub of ['Program Files (x86)', 'Program Files', 'Games', 'Juegos', 'Blizzard', '']) add(path.join(d, sub, 'World of Warcraft'), 'scan');
   }
   const forever = [];
   const wowOnly = [];
-  classify(dirs, forever, wowOnly);
+  classify(dirs, forever, wowOnly, 'win32');
+  const origin = Object.fromEntries(forever.map((f) => [f, from.get(path.dirname(f))]));
   const battlenet = [path.join(programData, 'Battle.net'), ...[env['ProgramFiles(x86)'], env.ProgramFiles].filter(Boolean).map((pf) => path.join(pf, 'Battle.net'))]
     .filter((p) => fs.existsSync(p));
-  return { forever, wowOnly, prefixes: battlenet };
+  return { forever, wowOnly, prefixes: battlenet, origin };
 }
 
-// { forever: [...WoW: Forever folders], wowOnly: [...WoW installs without Forever], prefixes: [...where Battle.net is] }
+// { forever: [...WoW: Forever folders], wowOnly: [...WoW installs without Forever], prefixes: [...where Battle.net is],
+//   origin: { [Forever folder]: where it was found (Windows only) } }
 export function findWowInstalls({ platform = process.platform, system, env, drives } = {}) {
-  const { forever, wowOnly, prefixes } =
+  const { forever, wowOnly, prefixes, origin = {} } =
     platform === 'darwin' ? macInstalls(system) : platform === 'win32' ? windowsInstalls(env, drives) : linuxInstalls();
-  return { forever, wowOnly: wowOnly.filter((w) => !forever.some((f) => f.startsWith(w + path.sep))), prefixes };
+  return { forever, wowOnly: wowOnly.filter((w) => !forever.some((f) => f.startsWith(w + path.sep))), prefixes, origin };
 }
 
 export function findWowDirs() {

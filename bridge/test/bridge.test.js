@@ -103,6 +103,72 @@ test('unencrypted frames: the hello is answered, commands are never run', async 
   assert.ok(b.client.encrypted);
 });
 
+test('once the addon talks sealed, plaintext hellos change nothing; a new UI session only gets the keys rewritten', () => {
+  const { b } = fakeBridge(120);
+  b.onFrame(frame(1, [['H', 1, 'sess', 'ui1', 5, 3, 0, 'o', 't1', '0.1.0', '120']]));
+  const before = JSON.stringify({ ...b.client, lastSeen: 0, confirmedAt: 0 });
+  const counter = b.persist.sigCounter;
+  let publishes = 0;
+  const publish = b.publishNow.bind(b);
+  b.publishNow = (reason) => (publishes++, publish(reason));
+  // Same UI session, absurd pointers, other flags and view: ignored.
+  b.onFrame(plainFrame(2, [['H', 1, 'sess', 'ui1', 119, 99999, 9e15, 'x', 'evil', '0.1.0', '1']]));
+  assert.equal(JSON.stringify({ ...b.client, lastSeen: 0, confirmedAt: 0 }), before);
+  assert.equal(b.persist.sigCounter, counter);
+  assert.equal(publishes, 0);
+  // A new UI session without keys (a /reload whose first slot didn't load): slots 1-3
+  // are rewritten with the keys, at most every 30 s, and the client stays as it was.
+  b.onFrame(plainFrame(3, [['H', 1, 'sess', 'ui2', 2, 1, 0, 'o', '', '0.1.0', '120']]));
+  b.onFrame(plainFrame(4, [['H', 1, 'sess', 'ui3', 2, 1, 0, 'o', '', '0.1.0', '120']]));
+  assert.equal(publishes, 1);
+  assert.equal(b.client.ui, 'ui1');
+  assert.equal(b.rejected.plainHellos, 3);
+  // The new session's sealed hello takes over as usual.
+  b.onFrame(frame(5, [['H', 1, 'sess', 'ui2', 2, 1, 0, 'o', '', '0.1.0', '120']]));
+  assert.equal(b.client.ui, 'ui2');
+  assert.equal(b.client.slotNext, 2);
+  b.stop();
+});
+
+test('hello values a real addon could not send are clamped', () => {
+  const { b } = fakeBridge(120);
+  b.onFrame(frame(1, [['H', 1, 'sess', 'ui1', 99999, 2 ** 40, 0, 'o;x', 'v'.repeat(500), '0.1.0', '-5']]));
+  assert.equal(b.client.slotNext, 1, 'a slot past the installed ones is ignored');
+  assert.equal(b.persist.sigCounter, 1);
+  assert.equal(b.client.slotCount, undefined, 'a negative slot count is ignored');
+  assert.equal(b.client.flags, '');
+  assert.equal(b.client.view, '');
+  // Same session: a bell far past our counter isn't adopted.
+  b.onFrame(frame(2, [['H', 1, 'sess', 'ui1', 3, 5000, b.lastGen, 'o', '', '0.1.0', '120']]));
+  assert.equal(b.persist.sigCounter, 1);
+  assert.equal(b.client.slotCount, 120);
+  b.stop();
+});
+
+test('commands for one thread run in order; other threads and Stop do not wait', async () => {
+  const { b } = fakeBridge();
+  const events = [];
+  const slow = (name, ms) => async (id) => {
+    events.push(`${name} ${id} start`);
+    await new Promise((r) => setTimeout(r, ms));
+    events.push(`${name} ${id} end`);
+  };
+  b.t3.respondAnswers = slow('answer', 60);
+  b.t3.sendMessage = slow('send', 1);
+  b.t3.interrupt = slow('stop', 1);
+  b.t3.threads.set('t2', { id: 't2', title: 'Other', projectId: 'p1', status: 'running', activityRunStatus: 'running', updatedAt: new Date().toISOString() });
+  b.onFrame(frame(1, [['H', 1, 'sess', 'ui1', 1, 1, 0, 'o', 't1', '0.1.0'], ['C', 1, 'answer', 't1', 'q1', 'q1', '2'], ['C', 2, 'send', 't1', 'next'], ['C', 3, 'stop', 't2'], ['C', 4, 'stop', 't1']]));
+  // Wait for the last command rather than a fixed time: the suite runs files in parallel.
+  for (let i = 0; i < 300 && !events.includes('send t1 end'); i++) await new Promise((r) => setTimeout(r, 10));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(events.filter((e) => e.includes('t1') && !e.startsWith('stop')), ['answer t1 start', 'answer t1 end', 'send t1 start', 'send t1 end']);
+  // Stop is one Escape the player wants now (orca.js keeps it out of an answer's keys).
+  assert.ok(events.indexOf('stop t1 end') < events.indexOf('answer t1 end'), "Stop doesn't wait behind the thread's other commands");
+  assert.ok(events.indexOf('stop t2 end') < events.indexOf('answer t1 end'), 'another thread runs meanwhile');
+  assert.equal(b.queues.size, 0, 'finished chains are dropped');
+  b.stop();
+});
+
 test('parseFrame reads hello and commands', () => {
   const f = parseFrame(Buffer.from(['H', 1, 'sess', 'ui1', 5, 9, 123, 'o', 'tid', '0.1.0'].join(US) + RS + ['C', 3, 'send', 'tid', 'hi there'].join(US)));
   assert.equal(f.hello.slot, 5);
@@ -141,6 +207,53 @@ test('commands run once, in order, and results are published', async () => {
   assert.match(lua, /results=\{\{id=1,ok=true,msg="Sent"\},\{id=2,ok=true,open="new-thread"\}/);
   assert.match(lua, /ack=\{ui="ui1",seq=2\}/);
   b.stop();
+});
+
+// AddOns stays writable by other accounts on a Windows PC: one could move a slot (or
+// Signals) aside while the bridge runs and put its own folder there, to collect the
+// strip key from the next publish.
+test('a slot folder replaced while the bridge runs stops publishing for good', () => {
+  const { b, dir } = fakeBridge();
+  b.onFrame(frame(1, [['H', 1, 'sess', 'ui1', 2, 1, 0, 'o', '', '0.1.0']]));
+  assert.ok(b.publishNow('test'));
+  const slot = path.join(dir, 'OrcaWow_S002');
+  fs.renameSync(slot, slot + '.aside');
+  fs.mkdirSync(slot);
+  b.markDirty('important');
+  assert.equal(b.publishNow('test'), false);
+  assert.match(b.halted, /OrcaWow_S002 was moved or replaced/);
+  assert.deepEqual(fs.readdirSync(slot), [], 'nothing was written into the new folder');
+  // Putting ours back doesn't resume it: only a restart (which checks again) does.
+  fs.rmSync(slot, { recursive: true });
+  fs.renameSync(slot + '.aside', slot);
+  assert.equal(b.publishNow('test'), false);
+  assert.match(JSON.parse(fs.readFileSync(b.statusFile, 'utf8')).halted, /run (install\.ps1|the install) again/);
+  b.stop();
+
+  // Signals swapped: the bells aren't rung there either.
+  const other = fakeBridge();
+  const sig = path.join(other.dir, 'OrcaWow', 'Signals');
+  fs.renameSync(sig, sig + '.aside');
+  fs.mkdirSync(sig);
+  assert.throws(() => other.b.bank.raise(1), { code: 'FOLDER_CHANGED' });
+  assert.deepEqual(fs.readdirSync(sig), []);
+  other.b.stop();
+});
+
+test('install removes temporary files a stopped bridge left behind, and nothing else', () => {
+  const dir = tempAddons(2);
+  try {
+    const sig = path.join(dir, 'OrcaWow', 'Signals');
+    const stale = [path.join(sig, '03991.wav.0123456789ab.tmp'), path.join(dir, 'OrcaWow_S002', 'Inbox.lua.a1b2c3d4e5f6.tmp')];
+    for (const f of stale) fs.writeFileSync(f, 'half');
+    fs.writeFileSync(path.join(sig, 'notes.tmp'), 'mine');
+    fs.mkdirSync(path.join(sig, 'dir.0123456789ab.tmp'));
+    assert.equal(new SlotBank(dir, { slots: 2 }).install().temps, 2);
+    for (const f of stale) assert.ok(!fs.existsSync(f));
+    assert.ok(fs.existsSync(path.join(sig, 'notes.tmp')) && fs.existsSync(path.join(sig, 'dir.0123456789ab.tmp')));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('a picked model rides along with new, and model switches a thread', async () => {
