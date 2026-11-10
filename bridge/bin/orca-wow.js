@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// t3code-wow: install and run the T3 Code bridge for World of Warcraft: Forever.
+// orca-wow: install and run the OrcaWow bridge for World of Warcraft: Forever.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -13,13 +13,16 @@ import { SlotBank, ADDON, CTL_LONG } from '../src/slots.js';
 import { StripCapture, SCREEN_PERMISSION_HELP } from '../src/capture.js';
 import { decodeImage } from '../src/codec.js';
 import { identify, discoverTailscale, mintRemote, revokeRemote, saveToken, readTokenData, tokenFile } from '../src/envs.js';
+import { DATA_DIR, WINDOWS } from '../src/paths.js';
+import { windowsStartup } from '../src/winservice.js';
+import { readRuntime as readOrcaRuntime } from '../src/orca.js';
+import { parseAccessLink, checkAccessLink, remoteIdFor, saveRemoteSecret, readRemoteSecret, removeRemoteSecret, remoteSecretFile, probeRemote } from '../src/orca-remote.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BRIDGE_ROOT = path.resolve(HERE, '..');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const MAC = process.platform === 'darwin';
-const DATA_DIR = path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 't3code-wow');
-const BIN_LINK = path.join(os.homedir(), '.local/bin/t3code-wow');
+const BIN_LINK = WINDOWS ? null : path.join(os.homedir(), '.local/bin/orca-wow');
 const DEFAULT_SLOTS = 1200;
 
 const C = process.stdout.isTTY
@@ -88,7 +91,7 @@ function resolveWowDir(args, cfg) {
   if (prefixes.length) {
     throw new Error(`found Battle.net (${prefixes[0]}) but no World of Warcraft. Install WoW: Forever from Battle.net, launch it once, then run ./install.sh again.${where}`);
   }
-  if (MAC) throw new Error(`couldn't find World of Warcraft. Install Battle.net from blizzard.com, install WoW: Forever from it and launch it once, then run ./install.sh again.${where}`);
+  if (MAC || WINDOWS) throw new Error(`couldn't find World of Warcraft. Install Battle.net from blizzard.com, install WoW: Forever from it and launch it once, then run the install again.${where}`);
   throw new Error(`couldn't find Battle.net. On Omarchy, install it with omarchy-install-gaming-battlenet; on CachyOS, add Battle.net to Faugus Launcher or Lutris. Then install WoW: Forever from it, launch it once, and run ./install.sh again.${where}`);
 }
 
@@ -105,25 +108,25 @@ function quiet(cmd, args, { warn = true } = {}) {
 // `brew upgrade node` deletes the old versioned folder, and the agent would then fail
 // to start at the next login.
 function bridgeCommand() {
-  const linked = (process.env.PATH || '').split(':').map((dir) => path.join(dir, 'node')).find((p) => {
+  const linked = (process.env.PATH || '').split(path.delimiter).map((dir) => path.join(dir, 'node')).find((p) => {
     try {
       return fs.realpathSync(p) === process.execPath;
     } catch {
       return false;
     }
   });
-  return [(MAC && linked) || process.execPath, path.join(BRIDGE_ROOT, 'bin', 't3code-wow.js'), 'run'];
+  return [(MAC && linked) || process.execPath, path.join(BRIDGE_ROOT, 'bin', 'orca-wow.js'), 'run'];
 }
 
 const systemd = {
-  name: 't3code-wow.service',
-  file: path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'systemd/user', 't3code-wow.service'),
+  name: 'orca-wow.service',
+  file: path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'systemd/user', 'orca-wow.service'),
   kind: 'user service',
   install() {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     fs.writeFileSync(this.file, [
       '[Unit]',
-      'Description=T3 Code bridge for World of Warcraft',
+      'Description=OrcaWow bridge for World of Warcraft',
       'After=graphical-session.target',
       '',
       '[Service]',
@@ -151,8 +154,8 @@ const systemd = {
 };
 
 const launchd = {
-  name: 't3code-wow',
-  file: path.join(os.homedir(), 'Library/LaunchAgents/t3code-wow.plist'),
+  name: 'orca-wow',
+  file: path.join(os.homedir(), 'Library/LaunchAgents/orca-wow.plist'),
   kind: 'launch agent',
   target: () => `gui/${process.getuid()}`,
   install() {
@@ -193,7 +196,7 @@ const launchd = {
   },
 };
 
-const service = MAC ? launchd : systemd;
+const service = WINDOWS ? windowsStartup(bridgeCommand) : MAC ? launchd : systemd;
 
 // Copy just the addon code (leaving Signals/ and generated media alone).
 function syncAddon(addonsDir) {
@@ -234,22 +237,34 @@ async function cmdInstall(args) {
   const next = { ...rest, wowDir, addonsDir, slots };
   writeConfig(next);
 
-  if (!findT3Cli()) {
-    console.log(C.r('✗ The `t3` command was not found. Open T3 Code once (it installs `t3`), then run `t3code-wow install` again.'));
+  if (next.backend !== 't3') {
+    // Orca needs no session token: the bridge reads Orca's own runtime file (pipe +
+    // token) each time it connects.
+    let running = false;
+    try {
+      readOrcaRuntime();
+      running = true;
+    } catch {}
+    console.log(running
+      ? `${C.g('✓')} Orca is running; the bridge will show its agents`
+      : `${C.y('!')} Orca isn't running right now; the bridge connects as soon as you open it`);
+  } else if (!findT3Cli()) {
+    console.log(C.r('✗ The `t3` command was not found. Open T3 Code once (it installs `t3`), then run `orca-wow install` again.'));
     process.exitCode = 1;
     return;
+  } else {
+    const token = readToken();
+    const claims = token && tokenClaims(token);
+    if (!claims || (claims.exp && claims.exp < Date.now() + 86400000)) {
+      process.stdout.write('… Creating a T3 Code session for the bridge (this takes a few seconds)\r');
+      await mintToken();
+    }
+    console.log(`${C.g('✓')} T3 Code session ready ${C.d('(scoped to reading and running threads; revoke with `t3 auth session list`)')}`);
   }
-  const token = readToken();
-  const claims = token && tokenClaims(token);
-  if (!claims || (claims.exp && claims.exp < Date.now() + 86400000)) {
-    process.stdout.write('… Creating a T3 Code session for the bridge (this takes a few seconds)\r');
-    await mintToken();
-  }
-  console.log(`${C.g('✓')} T3 Code session ready ${C.d('(scoped to reading and running threads; revoke with `t3 auth session list`)')}`);
 
   if (!args['no-service']) {
     if (!service.install()) {
-      console.log(C.r(`✗ The bridge's ${service.kind} didn't start (the error is above). Fix that, then run \`t3code-wow install\` again.`));
+      console.log(C.r(`✗ The bridge's ${service.kind} didn't start (the error is above). Fix that, then run \`orca-wow install\` again.`));
       process.exitCode = 1;
       return;
     }
@@ -260,7 +275,7 @@ async function cmdInstall(args) {
   console.log('');
   await firstLaunch({
     restart: freshAddon || had < slots || bellsMissing,
-    running: !!findWowProcess(),
+    running: !!(await findWowProcess()),
     waiting: !args['no-service'] && process.stdin.isTTY && process.stdout.isTTY,
     since: Date.now(),
   });
@@ -317,20 +332,21 @@ async function firstLaunch({ restart, running, waiting, since }) {
       const enc = readStatus()?.addon?.encrypted;
       console.log(`${C.g('✓')} Connected: the game and the bridge are talking${enc ? ' over an encrypted link' : ''}.`);
     } else if (!skipped) {
-      console.log(C.y('The game hasn\'t checked in yet. Once you\'re in, `t3code-wow status` shows whether it connected.'));
+      console.log(C.y('The game hasn\'t checked in yet. Once you\'re in, `orca-wow status` shows whether it connected.'));
     }
   }
   console.log(`
 ${C.b('In game')}
-  /t3                       open or close T3 Code (or click the T3 button on the minimap)
+  /orca                     open or close the window (or click its minimap button)
   both triggers + Back      open it from a controller
-  /t3 selftest              check the link step by step if something seems off
+  /orca selftest            check the link step by step if something seems off
 
 ${C.b('From here')}
-  t3code-wow env add <host>   show threads from another machine (T3 Connect)
-  t3code-wow status           what the bridge sees
+  orca-wow remote add <name> <access link>
+                              show another computer's Orca agents too
+  orca-wow status             what the bridge sees
   rerun the install command   update
-  t3code-wow uninstall        remove everything`);
+  orca-wow uninstall          remove everything`);
 }
 
 function cmdSync(args) {
@@ -365,7 +381,7 @@ function cmdStatus(args) {
   try {
     st = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'status.json'), 'utf8'));
   } catch {
-    console.log(C.r('The bridge has not run yet.'), 'Start it with `t3code-wow install` or `t3code-wow run`.');
+    console.log(C.r('The bridge has not run yet.'), 'Start it with `orca-wow install` or `orca-wow run`.');
     process.exitCode = 1;
     return;
   }
@@ -374,14 +390,25 @@ function cmdStatus(args) {
   const alive = age < 10000;
   const ok = (b) => (b ? C.g('●') : C.r('●'));
   console.log(`${ok(alive)} Bridge ${st.version} ${alive ? `running (pid ${st.pid})` : `not running (last seen ${ago(age)})`}`);
-  console.log(`${ok(st.t3.state === 'connected')} T3 Code: ${st.t3.state}${st.t3.error ? ` — ${st.t3.error}` : ''} ${C.d(`(${st.t3.threads} threads, ${st.t3.origin || '?'})`)}`);
+  const orca = st.backend !== 't3';
+  const envs = st.t3.environments || [];
+  if (orca && (envs.length > 1 || envs.some((e) => !e.local))) {
+    // One line per Orca: this PC's and each paired with `orca-wow remote add`.
+    for (const e of envs) {
+      const where = e.local ? 'this PC' : e.origin || 'remote';
+      console.log(`${ok(e.state === 'connected')} Orca ${e.local ? '' : `on ${e.label}`}${e.local ? `(${e.label})` : ''}: ${e.state}${e.error ? ` — ${e.error}` : ''} ${C.d(`(${e.threads} agents, ${where})`)}`);
+    }
+  } else {
+    console.log(`${ok(st.t3.state === 'connected')} ${orca ? 'Orca' : 'T3 Code'}: ${st.t3.state}${st.t3.error ? ` — ${st.t3.error}` : ''} ${C.d(`(${st.t3.threads} ${orca ? 'agents' : 'threads'}, ${st.t3.origin || '?'})`)}`);
+  }
+  if (orca && st.t3.environments && !envs.some((e) => e.local)) console.log(C.d("  This PC's own Orca is hidden (orca-wow local on shows it again)."));
   console.log(`${ok(!!st.wow)} WoW: ${st.wow ? `running (pid ${st.wow.pid})` : 'not running'}`);
   console.log(`${ok(st.capture.state === 'ok' || st.capture.state === 'idle')} Screen link: ${st.capture.state} via ${st.capture.backend} ${C.d(`(${st.capture.decoded} frames read, ${st.capture.rejected} rejected)`)}${st.capture.lastError ? `\n    ${C.y(st.capture.lastError)}` : ''}`);
   if (st.addon) {
     console.log(`${ok(true)} Addon ${st.addon.version}: last heard ${ago(Date.now() - st.addon.lastSeen)}; window ${st.addon.flags.includes('o') ? 'open' : 'closed'}`);
     console.log(`${ok(st.addon.encrypted)} Link ${st.addon.encrypted ? 'encrypted' : 'not encrypted yet (waiting for the addon to load its keys)'}${st.rejected?.forged ? C.d(` · ${st.rejected.forged} unauthenticated frames ignored`) : ''}`);
   } else {
-    console.log(`${ok(false)} Addon: not heard from yet ${C.d('(log in, then /t3)')}`);
+    console.log(`${ok(false)} Addon: not heard from yet ${C.d('(log in, then /orca)')}`);
   }
   console.log(`  Live updates left this session: ${st.slots.remaining}/${st.slots.total} ${C.d(`· ${st.publishes} updates sent · update bell #${st.signals.next}`)}`);
   console.log(`  Speech: ${st.voice.tts || C.y('none')} · Dictation: ${st.voice.dictation || C.y('none')}`);
@@ -393,12 +420,12 @@ function cmdStatus(args) {
 }
 
 async function cmdProbe() {
-  const proc = findWowProcess();
+  const proc = await findWowProcess();
   const cap = new StripCapture({});
   console.log(`backend: ${cap.resolveBackend()}; WoW pid: ${proc?.pid ?? 'not running'}`);
   const res = await cap.grab(proc?.pid);
   if (res.status !== 'ok') return console.log(`capture: ${res.status}`);
-  const out = path.join(os.tmpdir(), 't3code-wow-probe.ppm');
+  const out = path.join(os.tmpdir(), 'orca-wow-probe.ppm');
   const img = res.image;
   fs.writeFileSync(out, Buffer.concat([Buffer.from(`P6\n${img.width} ${img.height}\n255\n`), Buffer.from(img.data)]));
   let png = out;
@@ -408,7 +435,7 @@ async function cmdProbe() {
   } catch {}
   const dec = decodeImage(img, null, { searchY: res.searchY });
   console.log(`captured ${img.width}x${img.height} -> ${png}`);
-  if (!dec) console.log('no strip visible (open the T3 window in game, or send something)');
+  if (!dec) console.log('no strip visible (open the OrcaWow window in game, or send something)');
   else if (dec.error) console.log(`strip found but unreadable: ${dec.error} (cell ${dec.geo.cell}px at ${dec.geo.ox},${dec.geo.oy})`);
   else console.log(`strip decoded: seq ${dec.seq}, ${dec.payload.length} bytes, cell ${dec.geo.cell}px at ${dec.geo.ox},${dec.geo.oy}`);
 }
@@ -425,10 +452,10 @@ async function ask(question) {
 async function cmdUninstall(args) {
   const cfg = readConfig();
   if (!args.yes) {
-    console.log('This removes T3 Code for World of Warcraft: the addon and its update folders, its settings in the game,');
+    console.log('This removes OrcaWow: the addon and its update folders, its settings in the game,');
     console.log('the bridge service, the bridge\'s T3 Code sessions (on every machine it was added to) and its files.');
     if (!(await ask('Remove it? [y/N] '))) {
-      console.log(process.stdin.isTTY ? 'Nothing removed.' : 'Nothing removed. Run `t3code-wow uninstall --yes` to remove without asking.');
+      console.log(process.stdin.isTTY ? 'Nothing removed.' : 'Nothing removed. Run `orca-wow uninstall --yes` to remove without asking.');
       return;
     }
   }
@@ -494,12 +521,12 @@ async function cmdUninstall(args) {
   done('Removed the bridge\'s settings and state');
 
   try {
-    if (fs.lstatSync(BIN_LINK).isSymbolicLink() && fs.readlinkSync(BIN_LINK).startsWith(DATA_DIR)) fs.rmSync(BIN_LINK);
+    if (BIN_LINK && fs.lstatSync(BIN_LINK).isSymbolicLink() && fs.readlinkSync(BIN_LINK).startsWith(DATA_DIR)) fs.rmSync(BIN_LINK);
   } catch {}
   fs.rmSync(DATA_DIR, { recursive: true, force: true });
-  done('Removed the t3code-wow command and its files');
+  done('Removed the orca-wow command and its files');
 
-  if (findWowProcess()) console.log(`\nWorld of Warcraft is running: ${C.b('/reload')} or restart it to finish unloading T3 Code.`);
+  if (await findWowProcess()) console.log(`\nWorld of Warcraft is running: ${C.b('/reload')} or restart it to finish unloading OrcaWow.`);
 }
 
 async function cmdEnv(args) {
@@ -522,12 +549,12 @@ async function cmdEnv(args) {
       }
       console.log(`${C.b(e.label)} ${state} ${C.d(`· ssh ${e.ssh || '-'} · token ${tok?.expiresAt ? `until ${tok.expiresAt.slice(0, 10)}` : 'missing'}`)}`);
     }
-    if (!cfg.environments.length) console.log(C.d('No other machines yet. Add one with: t3code-wow env add <tailscale or ssh host> [--url https://...]'));
+    if (!cfg.environments.length) console.log(C.d('No other machines yet. Add one with: orca-wow env add <tailscale or ssh host> [--url https://...]'));
     return;
   }
   if (sub === 'add') {
     const host = args._[2];
-    if (!host) throw new Error('usage: t3code-wow env add <host> [--url https://...] [--ssh <ssh host>]');
+    if (!host) throw new Error('usage: orca-wow env add <host> [--url https://...] [--ssh <ssh host>]');
     const ssh = args.ssh ? String(args.ssh) : host;
     const urls = [];
     for (const u of [].concat(args.url || [])) urls.push(String(u).replace(/\/?$/, '/'));
@@ -554,7 +581,7 @@ async function cmdEnv(args) {
     process.stdout.write(`… Creating a T3 Code session on ${ident.label} over SSH (${ssh})\r`);
     const tok = await mintRemote(ssh, `WoW bridge (${local.label || os.hostname()})`);
     saveToken(ident.environmentId, tok);
-    console.log(`${C.g('✓')} Session created on ${ident.label} ${C.d(`(revoke with t3code-wow env remove ${ident.label})`)}`);
+    console.log(`${C.g('✓')} Session created on ${ident.label} ${C.d(`(revoke with orca-wow env remove ${ident.label})`)}`);
     const existing = cfg.environments.find((e) => e.id === ident.environmentId);
     const used = new Set(cfg.environments.map((e) => e.code));
     let code = existing?.code;
@@ -569,7 +596,7 @@ async function cmdEnv(args) {
   if (sub === 'remove') {
     const name = args._[2];
     const e = cfg.environments.find((x) => x.label === name || x.id === name || x.ssh === name);
-    if (!e) throw new Error(`no machine called ${name}; see t3code-wow env list`);
+    if (!e) throw new Error(`no machine called ${name}; see orca-wow env list`);
     const tok = readTokenData(e.id);
     if (tok?.sessionId && e.ssh) {
       try {
@@ -586,34 +613,164 @@ async function cmdEnv(args) {
     console.log(`${C.g('✓')} Removed ${e.label}`);
     return;
   }
-  throw new Error('usage: t3code-wow env [list|add <host>|remove <name>]');
+  throw new Error('usage: orca-wow env [list|add <host>|remove <name>]');
+}
+
+// ---- Orcas on other computers (Orca's own pairing: an access link) ----------------
+
+const PAIR_HELP = `On the other computer's Orca: Settings > Remote Orca Servers > New Link, pick its LAN address
+(not 127.0.0.1), Generate Access Link, and copy the orca://pair?code=... link under "Pair another
+Orca client". Or run there: orca pair --address <its LAN IP>`;
+
+function orcaConfig(cfg) {
+  cfg.orca = cfg.orca && typeof cfg.orca === 'object' ? cfg.orca : {};
+  cfg.orca.remotes = Array.isArray(cfg.orca.remotes) ? cfg.orca.remotes : [];
+  return cfg.orca;
+}
+
+function findRemote(remotes, name) {
+  const n = String(name || '').toLowerCase();
+  return remotes.find((r) => String(r.label).toLowerCase() === n || r.id === name || r.code === name);
+}
+
+function restartBridge() {
+  if (fs.existsSync(service.file)) {
+    service.restart();
+    return true;
+  }
+  return false;
+}
+
+function describeProbe(p) {
+  return p.ok ? C.g(`online${p.status?.appVersion ? ` (Orca ${p.status.appVersion}` : ' ('}${p.framing === 'legacy' ? ', older encryption' : ''})`) : C.r(p.error);
+}
+
+async function cmdRemote(args) {
+  const sub = args._[1] || 'list';
+  const cfg = readConfig();
+  const orca = orcaConfig(cfg);
+  if (sub === 'list') {
+    console.log(`${C.b('This PC')} ${orca.local === false ? C.d('hidden (orca-wow local on)') : C.d('shown')}`);
+    if (!orca.remotes.length) {
+      console.log(C.d(`No other computers yet. Add one with: orca-wow remote add <name> <access link>\n${PAIR_HELP}`));
+      return;
+    }
+    const rows = await Promise.all(
+      orca.remotes.map(async (r) => {
+        const secret = readRemoteSecret(r.id);
+        if (!secret) return [r, { ok: false, error: `its pairing is missing; run orca-wow remote add "${r.label}" <access link>` }];
+        return [r, await probeRemote(secret, { label: r.label, timeoutMs: Number(args.timeout) || 6000 })];
+      }),
+    );
+    for (const [r, p] of rows) console.log(`${C.b(r.label)} ${describeProbe(p)} ${C.d(`· ${r.endpoint} · ids ${r.code}~`)}`);
+    return;
+  }
+  if (sub === 'add') {
+    const name = args._[2];
+    const link = args._[3];
+    if (!name || !link) throw new Error(`usage: orca-wow remote add <name> <access link>\n${PAIR_HELP}`);
+    if (!/^[\w .'-]{1,32}$/.test(name)) throw new Error('Use a short name (letters, digits, spaces, . _ \' -), like MacBook.');
+    let offer;
+    try {
+      offer = parseAccessLink(link);
+    } catch (err) {
+      throw new Error(err.message);
+    }
+    const check = checkAccessLink(offer);
+    if (check.error) throw new Error(check.error);
+    if (check.warning) console.log(C.y(`! ${check.warning}`));
+    const id = remoteIdFor(offer);
+    const secret = { id, label: name, endpoint: offer.endpoint, deviceToken: offer.deviceToken, publicKeyB64: offer.publicKeyB64, scope: offer.scope, pairedDeviceId: offer.pairedDeviceId, addedAt: new Date().toISOString() };
+    if (!args['no-check']) {
+      process.stdout.write(`… Connecting to Orca at ${new URL(offer.endpoint).host}\r`);
+      const p = await probeRemote(secret, { label: name, timeoutMs: Number(args.timeout) || 10000 });
+      process.stdout.write('\r\x1b[2K');
+      if (!p.ok) {
+        const hints =
+          p.code === 'unreachable' || p.code === 'timeout' || p.code === 'closed'
+            ? `\nCheck that the other computer is awake with Orca open, on the same network as this PC, and that its firewall lets Orca accept incoming connections (macOS asks the first time; System Settings > Network > Firewall > Options). Nothing was saved; add --no-check to save it anyway.`
+            : '\nNothing was saved.';
+        throw new Error(`${p.error}${hints}`);
+      }
+      console.log(`${C.g('✓')} Connected to Orca${p.status?.appVersion ? ` ${p.status.appVersion}` : ''} on ${name}${p.framing === 'legacy' ? C.d(' (older encryption; update Orca there for E2EE v2)') : ''}`);
+    }
+    saveRemoteSecret(secret);
+    const existing = orca.remotes.find((r) => r.id === id) || findRemote(orca.remotes, name);
+    const used = new Set(orca.remotes.filter((r) => r !== existing).map((r) => r.code));
+    let code = existing?.code && !used.has(existing.code) ? existing.code : null;
+    for (let n = 1; !code; n++) if (!used.has(`e${n}`)) code = `e${n}`;
+    if (existing && existing.id !== id) removeRemoteSecret(existing.id);
+    orca.remotes = orca.remotes.filter((r) => r !== existing).concat({ code, label: name, id, endpoint: offer.endpoint });
+    writeConfig(cfg);
+    console.log(`${C.g('✓')} Saved ${C.b(name)} ${C.d(`(pairing in ${remoteSecretFile(id)})`)}`);
+    if (cfg.backend === 't3') console.log(C.y('! The bridge is set to the T3 Code backend; remote Orcas show only with the Orca backend.'));
+    console.log(restartBridge() ? `${C.g('✓')} ${name}'s agents will show in game within a few seconds.` : C.d('Start the bridge (orca-wow run, or orca-wow install) to see them in game.'));
+    return;
+  }
+  if (sub === 'remove') {
+    const name = args._[2];
+    if (!name) throw new Error('usage: orca-wow remote remove <name>');
+    const r = findRemote(orca.remotes, name);
+    if (!r) throw new Error(`No other computer called ${name}; see orca-wow remote list`);
+    removeRemoteSecret(r.id);
+    orca.remotes = orca.remotes.filter((x) => x !== r);
+    writeConfig(cfg);
+    restartBridge();
+    console.log(`${C.g('✓')} Removed ${r.label}. ${C.d("To revoke this PC's access there too: its Orca > Settings > Remote Orca Servers > Shared Server Access.")}`);
+    return;
+  }
+  throw new Error('usage: orca-wow remote [list|add <name> <access link>|remove <name>]');
+}
+
+function cmdLocal(args) {
+  const sub = args._[1];
+  const cfg = readConfig();
+  const orca = orcaConfig(cfg);
+  if (!sub) {
+    console.log(`This PC's Orca is ${orca.local === false ? 'hidden' : 'shown'} in game ${C.d('(orca-wow local on|off)')}`);
+    return;
+  }
+  if (sub !== 'on' && sub !== 'off') throw new Error('usage: orca-wow local on|off');
+  orca.local = sub === 'on';
+  if (!orca.local && !orca.remotes.length) console.log(C.y('! No other computer is added yet, so the game will show no agents. Add one with orca-wow remote add.'));
+  writeConfig(cfg);
+  restartBridge();
+  console.log(`${C.g('✓')} This PC's Orca is ${orca.local ? 'shown' : 'hidden'} in game.`);
 }
 
 function help() {
-  console.log(`${C.b('t3code-wow')} ${VERSION} — T3 Code inside World of Warcraft: Forever
+  console.log(`${C.b('orca-wow')} ${VERSION} — Orca's coding agents inside World of Warcraft: Forever
 
-  t3code-wow install [--wow DIR] [--slots N] [--no-service]
+  orca-wow install [--wow DIR] [--slots N] [--no-service]
                      Install the addon, its live-update slots and the bridge service
-  t3code-wow status [--log] [--json]
+  orca-wow status [--log] [--json]
                      Show what the bridge sees
-  t3code-wow sync        Re-copy the installed addon into the game (to update, rerun the install command)
-  t3code-wow run [--verbose]
+  orca-wow sync          Re-copy the installed addon into the game (to update, rerun the install command)
+  orca-wow run [--verbose]
                      Run the bridge in the foreground (the service runs this)
-  t3code-wow env [list]  Other T3 Code machines shown in game (T3 Connect / Tailscale)
-  t3code-wow env add <host> [--url https://...] [--ssh <ssh host>]
+  orca-wow remote [list]  Other computers' Orcas shown in game, and whether they answer
+  orca-wow remote add <name> <access link> [--no-check]
+                     Show another computer's Orca too. The access link (orca://pair?code=...)
+                     comes from that Orca: Settings > Remote Orca Servers > New Link >
+                     Generate Access Link, or \`orca pair --address <its LAN IP>\` there
+  orca-wow remote remove <name>
+                     Stop showing that computer's Orca and forget its pairing
+  orca-wow local on|off  Show this PC's own Orca in game too (on by default)
+  orca-wow env [list]    Other T3 Code machines shown in game (T3 Connect / Tailscale)
+  orca-wow env add <host> [--url https://...] [--ssh <ssh host>]
                      Show another machine's threads too (finds it on Tailscale,
                      creates its session over SSH)
-  t3code-wow env remove <name>
+  orca-wow env remove <name>
                      Stop showing a machine and revoke the bridge's session there
-  t3code-wow probe       Capture the corner of the game window and try to read the strip
-  t3code-wow uninstall [--yes]
+  orca-wow probe         Capture the corner of the game window and try to read the strip
+  orca-wow uninstall [--yes]
                      Remove the addon, its settings, the service, the bridge's
                      T3 Code sessions and its files`);
 }
 
 const args = parseArgs(process.argv.slice(2));
 const cmd = args._[0];
-const commands = { env: cmdEnv, install: cmdInstall, run: cmdRun, status: cmdStatus, sync: cmdSync, probe: cmdProbe, uninstall: cmdUninstall };
+const commands = { env: cmdEnv, remote: cmdRemote, local: cmdLocal, install: cmdInstall, run: cmdRun, status: cmdStatus, sync: cmdSync, probe: cmdProbe, uninstall: cmdUninstall };
 if (!cmd || args.help || !commands[cmd]) {
   help();
   if (cmd && !commands[cmd]) process.exitCode = 1;

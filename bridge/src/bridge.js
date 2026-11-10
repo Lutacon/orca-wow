@@ -5,12 +5,11 @@
 //   game -> bridge   pixel frame: records split by RS, fields by US
 //       H  proto session ui slot sig gen flags view version     (always first)
 //       C  id verb args...                                      (pending commands)
-//   bridge -> game   T3Code_Inbox = { gen, nextSig, ack = { ui, seq }, threads, view, ... }
+//   bridge -> game   OrcaWow_Inbox = { gen, nextSig, ack = { ui, seq }, threads, view, ... }
 //                    written into the next slots the addon will load, then signal
 //                    `nextSig - 1` is raised so the addon loads exactly one slot.
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { RS, US } from './codec.js';
@@ -19,14 +18,16 @@ import { SlotBank } from './slots.js';
 import { threadStatus, isUnread, effortOf } from './t3.js';
 import { Fleet } from './fleet.js';
 import { tokenProvider } from './auth.js';
+import { OrcaFleet } from './orca-fleet.js';
 import { Voice } from './voice.js';
 import { OmarchyUsage, mergeUsage } from './usage.js';
 import { findWowProcess, processKey } from './wow.js';
 import { markdownToWow, markdownToSpeech, firstLine, escapeWow } from './format.js';
 import { loadOrCreateKey, deriveKeys, open as openSealed, ENCRYPTED_VERSION } from './strip-crypto.js';
+import { STATE_DIR } from './paths.js';
 
 export const VERSION = '0.3.0';
-export const STATE_DIR = path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local/state'), 't3code-wow');
+export { STATE_DIR };
 
 const sec = (iso) => (iso ? Math.floor(Date.parse(iso) / 1000) : undefined);
 
@@ -195,7 +196,7 @@ export function friendlyError(message) {
   const text = String(message || 'failed');
   if (/Missing key|Expected .*(Literal|Struct|Union)|is unexpected|Unexpected key/.test(text)) {
     const field = /at \[\"?([^\]"]+)/.exec(text)?.[1];
-    return `T3 Code didn't accept that request${field ? ` (it wants "${field}")` : ''}. Update t3code-wow to match your T3 Code version.`;
+    return `T3 Code didn't accept that request${field ? ` (it wants "${field}")` : ''}. Update orca-wow to match your T3 Code version.`;
   }
   return text.split('\n')[0].slice(0, 200);
 }
@@ -215,9 +216,20 @@ export class Bridge {
     const installed = this.bank.installedSlotCount();
     if (installed > 0) this.bank.slots = installed;
     this.capture = new StripCapture({ log: this.log, backend: config.capture?.backend || 'auto', region: config.capture?.region || null });
-    this.tokens = tokenProvider({ log: this.log });
-    // Every T3 Code machine we show: this one, plus any added with `t3code-wow env add`.
-    this.t3 = new Fleet({ localTokens: this.tokens, environments: config.environments || [], log: this.log });
+    // The agents' backend: Orca by default; the original T3 Code backend stays
+    // available with `"backend": "t3"` in config.json. `this.t3` keeps its old name:
+    // both clients expose the same interface (see orca.js).
+    this.backend = config.backend === 't3' ? 't3' : 'orca';
+    if (this.backend === 't3') {
+      this.tokens = tokenProvider({ log: this.log });
+      // Every T3 Code machine we show: this one, plus any added with `orca-wow env add`.
+      this.t3 = new Fleet({ localTokens: this.tokens, environments: config.environments || [], log: this.log });
+    } else {
+      // This PC's Orca (unless `orca.local` is false) plus any paired with
+      // `orca-wow remote add` (`orca.remotes`; their secrets live in CONFIG_DIR/remotes).
+      this.t3 = new OrcaFleet({ log: this.log, stateDir, ...(config.orca || {}) });
+    }
+    this.backendName = this.backend === 't3' ? 'T3' : 'Orca';
     this.voice = new Voice({ ttsCommand: config.tts?.command || null, rate: config.tts?.rate || 0, log: this.log });
     this.stateDir = stateDir;
     this.stateFile = path.join(stateDir, 'state.json');
@@ -263,7 +275,7 @@ export class Bridge {
   // ---------------------------------------------------------------------------
 
   async start() {
-    this.log(`t3code-wow bridge ${VERSION}; addons: ${this.addonsDir}; slots: ${this.bank.slots}`);
+    this.log(`orca-wow bridge ${VERSION}; addons: ${this.addonsDir}; slots: ${this.bank.slots}`);
     try {
       this.bank.prepareBells();
     } catch (err) {
@@ -272,7 +284,7 @@ export class Bridge {
     const v = this.voice.describe();
     this.log(`speech: ${v.tts || 'none'}; dictation: ${v.dictation || 'none'}; capture: ${this.capture.resolveBackend()}`);
     this.t3.on('state', (s, e) => {
-      this.log(`T3: ${s}${e ? ` (${e})` : ''}`);
+      this.log(`${this.backendName}: ${s}${e ? ` (${e})` : ''}`);
       this.markDirty('important');
     });
     this.t3.on('change', (ev) => this.onT3Change(ev));
@@ -297,8 +309,19 @@ export class Bridge {
     this.voice.hush();
   }
 
-  checkProcess() {
-    const proc = findWowProcess();
+  async checkProcess() {
+    if (this.checkingProcess) return;
+    this.checkingProcess = true;
+    let proc;
+    try {
+      proc = await findWowProcess();
+    } catch (err) {
+      this.log(`couldn't look for the WoW client: ${err.message}`);
+      return;
+    } finally {
+      this.checkingProcess = false;
+    }
+    if (this.stopped) return;
     const key = processKey(proc);
     const was = this.proc;
     this.proc = proc;
@@ -456,13 +479,22 @@ export class Bridge {
           ok = null;
           break;
         case 'new': {
-          // new <project> <text> [<instanceId> <model> [<effort>]]; the model is
-          // empty when only the reasoning level was picked.
+          // T3:   new <project> <text> [<instanceId> <model> [<effort>]]; the model is
+          //       empty when only the reasoning level was picked.
+          // Orca: new <project> <text> [<agent> [<worktree name> [<base branch>]]]; empty
+          //       fields mean Orca's defaults.
           const attachments = await this.takeShots('new', a0);
-          const [, , instanceId, model, effort] = cmd.args;
           const opts = {};
-          if (instanceId && model) opts.model = { instanceId, model };
-          if (effort) opts.effort = effort;
+          if (this.backend === 'orca') {
+            const [, , agent, name, baseBranch] = cmd.args;
+            if (agent) opts.agent = agent;
+            if (name) opts.name = name;
+            if (baseBranch) opts.baseBranch = baseBranch;
+          } else {
+            const [, , instanceId, model, effort] = cmd.args;
+            if (instanceId && model) opts.model = { instanceId, model };
+            if (effort) opts.effort = effort;
+          }
           const res = await this.t3.launchThread(a0, a1, attachments, opts);
           msg = 'Thread started';
           if (res?.threadId) this.results.push({ id: cmd.id, ok: true, open: res.threadId });
@@ -819,6 +851,7 @@ export class Bridge {
     return {
       bridge: {
         version: VERSION,
+        backend: this.backend,
         t3: t3.state,
         t3err: t3.error ? escapeWow(t3.error) : undefined,
         server: t3.config?.environment?.serverVersion,
@@ -838,8 +871,15 @@ export class Bridge {
       newShots: this.shots.get('new')?.length || undefined,
       // ~100 models is several KB, so only when the addon doesn't hold this list yet.
       models: models && this.client?.modelsHash !== models.h ? models : undefined,
+      // Orca: the agents a new worktree can start with ({ i, l }) and the preselected one.
+      agents: this.t3.agentChoices ? this.agentsSection() : undefined,
       results: this.results.slice(-8).map(({ id, ok, msg, open }) => ({ id, ok, msg, open })),
     };
+  }
+
+  agentsSection() {
+    const { list, default: def } = this.t3.agentChoices();
+    return { d: def, o: list.map((a) => ({ i: a.id, l: escapeWow(a.label) })) };
   }
 
   // Every machine's model list for the game's model picker, with a short hash the
@@ -1024,6 +1064,7 @@ export class Bridge {
       version: VERSION,
       pid: process.pid,
       at: new Date().toISOString(),
+      backend: this.backend,
       t3: { state: this.t3.state, error: this.t3.error, threads: this.t3.threads.size, origin: this.t3.origin, environments: this.t3.environments() },
       wow: this.proc ? { pid: this.proc.pid } : null,
       capture: { state: this.captureState, backend: this.capture.resolveBackend(), ...this.capture.stats, lastError: this.capture.lastError },

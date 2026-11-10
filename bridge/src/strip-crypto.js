@@ -1,4 +1,4 @@
-// Strip encryption, the bridge's end of addon/T3Code/Core/Crypto.lua.
+// Strip encryption, the bridge's end of addon/OrcaWow/Core/Crypto.lua.
 //
 // The strip is on screen, so anyone watching a stream or recording could decode it.
 // Frames therefore carry
