@@ -590,7 +590,12 @@ export class PairedSocket {
           this.fail(err instanceof RemoteError ? err : remoteError('protocol', `Orca on ${this.label} sent something unreadable (${plainText(err.message).slice(0, 200)})`));
         }
       });
-      ws.addEventListener('error', () => {}); // a close event follows with the code
+      // A close event with the code usually follows, but Node 22's WebSocket sends only
+      // the error when nothing listens at the address: without this, an Orca that's off
+      // looked like one that was slow to answer until the 12 s timeout.
+      ws.addEventListener('error', () => {
+        if (this.stage === 'connect') finish(remoteError('unreachable', `Can't reach Orca on ${this.label}`));
+      });
       ws.addEventListener('close', (ev) => this.onClose(ev.code, String(ev.reason || '')));
     });
   }
