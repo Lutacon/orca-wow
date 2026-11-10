@@ -61,10 +61,28 @@ export const LONG_SILENT_WAV = (() => {
   return b;
 })();
 
-function atomicWrite(file, content) {
+// On Windows a file another process has open can't be replaced, and the client keeps a
+// bell open while it plays it (each poll of the addon's look-ahead window holds one for
+// a fraction of a second). So a refused rename is retried briefly before giving up.
+const RENAME_TRIES = process.platform === 'win32' ? 40 : 1;
+const RENAME_WAIT_MS = 20;
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+export function atomicWrite(file, content, { tries = RENAME_TRIES, rename = fs.renameSync } = {}) {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, content);
-  fs.renameSync(tmp, file);
+  for (let i = 1; ; i++) {
+    try {
+      rename(tmp, file);
+      return;
+    } catch (err) {
+      if (i >= tries || !['EPERM', 'EACCES', 'EBUSY'].includes(err.code)) {
+        fs.rmSync(tmp, { force: true });
+        throw err;
+      }
+      pause(RENAME_WAIT_MS);
+    }
+  }
 }
 
 export class SlotBank {

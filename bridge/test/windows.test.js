@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ReplyParser, bgraToRgb, WinHelper } from '../src/winhelper.js';
 import { taskArguments, taskScript, taskXml } from '../src/winservice.js';
+import { atomicWrite } from '../src/slots.js';
 
 const WIN = process.platform === 'win32';
 
@@ -31,6 +32,29 @@ test('converts BGRA to the RGB buffers codec.js reads', () => {
   const img = bgraToRgb(Buffer.from([10, 20, 30, 0]), 1, 1);
   assert.ok(Buffer.isBuffer(img.data));
   assert.deepEqual([...img.data], [30, 20, 10]);
+});
+
+// The game holds a bell open while it plays it, and Windows refuses to replace an open
+// file: the write waits for the game to let go instead of failing the publish.
+test('a bell write waits out a file the game has open, and gives up cleanly', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orca-bell-'));
+  try {
+    const file = path.join(dir, '03993.wav');
+    const busy = (n) => {
+      let left = n;
+      return (from, to) => {
+        if (left-- > 0) throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+        fs.renameSync(from, to);
+      };
+    };
+    atomicWrite(file, 'rung', { tries: 5, rename: busy(3) });
+    assert.equal(fs.readFileSync(file, 'utf8'), 'rung');
+    assert.throws(() => atomicWrite(file, 'again', { tries: 5, rename: busy(10) }), { code: 'EPERM' });
+    assert.equal(fs.readFileSync(file, 'utf8'), 'rung');
+    assert.deepEqual(fs.readdirSync(dir), ['03993.wav'], 'no temp file left behind');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('the logon task XML runs its script hidden', () => {
