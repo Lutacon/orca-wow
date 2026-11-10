@@ -2,7 +2,7 @@
 
 See and control your [Orca](https://github.com/stablyai/orca) agents (Claude Code, Codex and others, each in its own git worktree) without leaving **World of Warcraft: Forever**, on Windows.
 
-This is a fork of [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow), which does the same for T3 Code on Linux and macOS. This fork adds Windows and an Orca backend. The upstream Linux and macOS support is kept, and the T3 Code backend is still available with `"backend": "t3"` in the bridge's config. The work plan and its status are in [PLAN.md](PLAN.md).
+This is a fork of [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow). This fork adds Windows support and connects the addon to Orca.
 
 > Experimental. The Orca APIs it uses (the local named pipe, and the encrypted WebSocket for other computers) are internal to Orca and can change between versions.
 
@@ -15,24 +15,32 @@ This is a fork of [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code
 - Notices when an agent finishes or asks for something: a toast, a sound, a line in chat and a section in the objective tracker. They wait until you leave combat.
 - Replies read aloud with the Windows voice. Controller support.
 
-## Requirements
+## Getting started
 
-- Windows 10 or 11 with **World of Warcraft: Forever** installed from Battle.net. Windowed and borderless fullscreen both work.
-- **Orca** open on this computer or on another one on your network (see "Orca on another computer").
-- **Node.js 22 or newer**: `winget install OpenJS.NodeJS.LTS`.
-- Nothing else. The capture helper is compiled with the C# compiler that ships with Windows (.NET Framework 4).
+You need Windows 10 or 11 and **World of Warcraft: Forever** installed from Battle.net. Windowed and borderless fullscreen both work. You don't need to be an administrator for any of these steps.
 
-On Linux and macOS, install from a checkout with `./install.sh`, as upstream does. This fork has only been tested on Windows.
+1. **Install Node.js 22 or newer.** In a terminal: `winget install OpenJS.NodeJS.LTS`. Nothing else is needed: the screen capture helper is compiled with the C# compiler that ships with Windows.
+2. **Install [Orca](https://github.com/stablyai/orca) and open it**, on this PC or on another computer on your network (for that, also follow "Orca on another computer" below). Add a repository in Orca and start an agent, so there's something to see in game.
+3. **Get this repository**, either with `git clone https://github.com/Lutacon/orca-wow.git` or with **Code → Download ZIP** on GitHub, then extract it.
+4. **Close the game** and run the installer from the repository's folder, in your own terminal:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\install.ps1
+   ```
+   It puts the addon in the game, starts the bridge and tells you what to do next. If it can't find the game, add `--wow "D:\Games\World of Warcraft"` (the folder that contains `_forever_`).
+5. **Start World of Warcraft: Forever.** At character select, open **AddOns** and check that **Orca** is enabled. Its "live update slots" are grouped under it; leave them enabled. If Orca is listed as out of date, tick **Load out of date AddOns**.
+6. **Log in to a character.** The installer, still waiting in your terminal, says "Connected" when the game and the bridge talk to each other.
+7. In game, type `/orca` or click the Orca button on the minimap. From a controller, hold both triggers and press Back. `/orca selftest` checks the link step by step if something seems off.
 
-## Install
+The bridge then starts by itself each time you sign in to Windows, so from now on you only need Orca open and the game running.
 
-With the game **closed**, from a copy of the repository, in your own terminal (you don't need to be an administrator):
+### If it doesn't connect
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
+- `orca-wow status` (see "Using it" for where the command is) says what the bridge sees: Orca, the game, the capture and the addon. `orca-wow status --log` adds its recent log.
+- The game window must be on screen, not minimized. Other windows covering it are fine.
+- After installing for the first time, or after an update that added folders or sounds, quit the game completely and start it again: `/reload` isn't enough, because the game only finds new addon folders when it starts.
+- If Orca runs on this PC, it must be open. `orca-wow status` says so when it can't reach it.
 
-The installer:
+## What the installer does
 
 1. Copies the bridge and the addon to `%LOCALAPPDATA%\orca-wow\app`, and creates the `orca-wow` command at `%LOCALAPPDATA%\orca-wow\orca-wow.cmd`.
 2. Installs the addon and its 1200 update folders (`OrcaWow_S###`) in `_forever_\Interface\AddOns`.
@@ -42,11 +50,11 @@ The installer:
 
 Options: `--wow "D:\Games\World of Warcraft"`, `--slots N` and `--no-service` (then start the bridge yourself with `orca-wow run`).
 
-In the commands below, `orca-wow` stands for `%LOCALAPPDATA%\orca-wow\orca-wow.cmd`. Add `%LOCALAPPDATA%\orca-wow` to your PATH to type just `orca-wow`.
-
-**Update:** run `install.ps1` again. If only the addon's code changed, `/reload` in game is enough. If there are new folders or sounds, restart the game.
+**Update:** get the latest version of the repository (`git pull`, or download it again) and run `install.ps1` again. If only the addon's code changed, `/reload` in game is enough. If there are new folders or sounds, restart the game.
 
 **Uninstall:** `orca-wow uninstall`.
+
+Linux and macOS: the original project's `./install.sh` is still here, but this fork has only been tested on Windows.
 
 ## Orca on another computer (for example a MacBook)
 
@@ -78,9 +86,12 @@ In game, each computer's agents carry its name, and you can filter by computer. 
 
 ## Using it
 
+In the commands below, `orca-wow` stands for `%LOCALAPPDATA%\orca-wow\orca-wow.cmd`. Add `%LOCALAPPDATA%\orca-wow` to your PATH to type just `orca-wow`.
+
 | In game | |
 |---|---|
 | `/orca` | open or close the window (or click the minimap button) |
+| both triggers + Back | open the window from a controller |
 | `/orca new <text>` | start a new agent (options: `--agent codex --name my-branch --base develop`) |
 | `/orca selftest` | check the link step by step, with the round-trip time |
 | `/orca status` | the state of the bridge and of Orca |
@@ -131,4 +142,4 @@ The details of the link with the game are in [docs/ARCHITECTURE.md](docs/ARCHITE
 
 ## License
 
-[MIT](LICENSE). A fan project, not affiliated with Blizzard Entertainment, Stably (Orca) or T3. World of Warcraft is a trademark of Blizzard Entertainment. Orca's name and logo belong to Stably and are used here only to identify the integration.
+[MIT](LICENSE). A fan project, not affiliated with Blizzard Entertainment or Stably (Orca). World of Warcraft is a trademark of Blizzard Entertainment. Orca's name and logo belong to Stably and are used here only to identify the integration.
