@@ -123,6 +123,10 @@ export class OrcaRpcError extends Error {
   }
 }
 
+// agentActivity.setRead errors that mean Orca's window couldn't apply it (Orca's
+// agent-pane-activity-relay.ts and runtime-client-state.ts), not that the call is wrong.
+const WINDOW_REFUSALS = ['agent_activity_timeout', 'agent_activity_needs_desktop_window', 'agent_activity_not_ready', 'renderer_unavailable'];
+
 // One connection to Orca's pipe, many requests on it (the server answers by id).
 class RpcPipe {
   constructor(endpoint, token) {
@@ -1242,7 +1246,7 @@ export class OrcaClient extends EventEmitter {
   async settle(threadId) {
     const ref = this.ref(threadId);
     await this.call('worktree.set', { worktree: `id:${ref.worktreeId}`, workspaceStatus: 'completed', isUnread: false, acknowledgeAttention: true });
-    await this.markRead(ref);
+    void this.markRead(ref);
     this.pollSoon();
   }
 
@@ -1268,7 +1272,7 @@ export class OrcaClient extends EventEmitter {
 
   async visit(threadId) {
     const ref = this.ref(threadId);
-    await this.markRead(ref);
+    void this.markRead(ref);
     const prev = this.threads.get(threadId);
     if (ref.row?.unread) {
       await this.call('worktree.set', { worktree: `id:${ref.worktreeId}`, isUnread: false, acknowledgeAttention: true });
@@ -1282,11 +1286,37 @@ export class OrcaClient extends EventEmitter {
     this.pollSoon();
   }
 
-  // The desktop Agents list keeps its own per-pane read state; older Orca lacks it.
-  async markRead(ref) {
-    await this.call('agentActivity.setRead', { paneKeys: [ref.paneKey], read: true }).catch((err) => {
-      if (err?.code !== 'method_not_found') this.log(`Orca: agentActivity.setRead: ${err.message}`);
+  // The desktop Agents list keeps its own per-pane read state; older Orca lacks it. Orca
+  // applies agentActivity.setRead in its window and gives up after 10 s when the window
+  // doesn't answer (closed, hidden or asleep on that computer), so visits don't wait for
+  // it: reads go out one batch at a time, and a window that can't take them is logged
+  // once until a read gets through again. worktree.set still clears the unread dot.
+  markRead(ref) {
+    (this.readsToSend ??= new Set()).add(ref.paneKey);
+    this.sendingReads ??= this.sendReads().finally(() => {
+      this.sendingReads = null;
     });
+    return this.sendingReads;
+  }
+
+  async sendReads() {
+    while (this.readsToSend.size && !this.stopped) {
+      const paneKeys = [...this.readsToSend];
+      this.readsToSend.clear();
+      try {
+        await this.call('agentActivity.setRead', { paneKeys, read: true });
+        this.readRefusal = null;
+      } catch (err) {
+        if (err?.code === 'method_not_found') continue;
+        const reason = WINDOW_REFUSALS.find((r) => r === err?.code || r === err?.message);
+        if (!reason) {
+          this.log(`Orca: agentActivity.setRead: ${err.message}`);
+        } else if (this.readRefusal !== reason) {
+          this.readRefusal = reason;
+          this.log(`Orca: couldn't mark agents read in Orca's Agents list at ${this.origin} (${reason}). Orca's window on that computer has to be open and awake for that; the game still shows them as read.`);
+        }
+      }
+    }
   }
 
   setModel() {

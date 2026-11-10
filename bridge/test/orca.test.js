@@ -561,6 +561,7 @@ test('settle, unsettle, visit and archive map onto Orca', async (t) => {
   const wt = 'id:repo-1::C:/src/app/fix-login';
   assert.equal(isUnread(only(client)), true);
   await client.visit(id);
+  await waitFor(() => orca.callsOf('agentActivity.setRead').length === 1);
   assert.deepEqual(orca.callsOf('agentActivity.setRead')[0], { paneKeys: ['tab-1:leaf-1'], read: true });
   assert.deepEqual(orca.callsOf('worktree.set')[0], { worktree: wt, isUnread: false, acknowledgeAttention: true });
   assert.equal(isUnread(client.threads.get(id)), false);
@@ -580,6 +581,44 @@ test('settle, unsettle, visit and archive map onto Orca', async (t) => {
   const polls = orca.callsOf('worktree.ps').length;
   await waitFor(() => orca.callsOf('worktree.ps').length > polls + 2);
   assert.equal(threadStatus(client.threads.get(id)), 'archived');
+});
+
+// Orca marks agents read in its window and gives up after 10 s when that window doesn't
+// answer (seen on a remote Orca whose window was away): visits must not wait for it.
+test("visits don't wait for Orca's window to mark agents read, and its refusal is logged once", async (t) => {
+  let answer = null;
+  const { client, orca, logs } = await setup(t, (o) => {
+    o.worktrees = [worktreeRow({ unread: true, agents: [agentRow({ state: 'done', stateStartedAt: Date.now() - 1000 })] })];
+    o.handlers['agentActivity.setRead'] = () => new Promise((resolve, reject) => {
+      answer = { resolve, reject };
+    });
+  });
+  const id = only(client).id;
+  const refusal = () => Object.assign(new Error('agent_activity_timeout'), { code: 'runtime_error' });
+  const refusals = () => logs.filter((l) => /agent_activity_timeout/.test(l)).length;
+
+  await client.visit(id); // returns while Orca still holds the read
+  assert.equal(orca.callsOf('worktree.set').length, 1);
+  await waitFor(() => answer);
+  await client.visit(id);
+  await client.settle(id);
+  answer.reject(refusal());
+  // The two later reads went out together once the first was answered.
+  await waitFor(() => orca.callsOf('agentActivity.setRead').length === 2);
+  assert.deepEqual(orca.callsOf('agentActivity.setRead')[1], { paneKeys: ['tab-1:leaf-1'], read: true });
+  answer.reject(refusal());
+  await waitFor(() => !client.sendingReads);
+  assert.equal(refusals(), 1, 'logged once');
+
+  // Once a read gets through, the next refusal is news again.
+  client.markRead(client.ref(id));
+  await waitFor(() => orca.callsOf('agentActivity.setRead').length === 3);
+  answer.resolve({ applied: true });
+  await waitFor(() => !client.sendingReads);
+  client.markRead(client.ref(id));
+  await waitFor(() => orca.callsOf('agentActivity.setRead').length === 4);
+  answer.reject(refusal());
+  await waitFor(() => refusals() === 2);
 });
 
 test("offline while Orca isn't running, then connects when the runtime file appears", async (t) => {
