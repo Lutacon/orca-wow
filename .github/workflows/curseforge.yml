@@ -1,0 +1,70 @@
+# Uploads the addon (the OrcaWow folder) of a release tag to CurseForge. The release
+# workflow calls it after publishing on GitHub; run it by hand to upload a tag again:
+#
+#   gh workflow run curseforge.yml -f tag=v0.4.1
+#
+# Needs the repository variable CF_PROJECT_ID and the secret CF_API_KEY (see
+# docs/CURSEFORGE.md).
+name: CurseForge
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to upload, like v0.4.1
+        type: string
+        required: true
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Upload the addon
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_PROJECT_ID: ${{ vars.CF_PROJECT_ID }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          test -n "$CF_PROJECT_ID" || { echo "The repository variable CF_PROJECT_ID isn't set."; exit 1; }
+          test -n "$CF_API_KEY" || { echo "The secret CF_API_KEY isn't set."; exit 1; }
+          # A request to CurseForge; prints its answer (never the token) and fails on
+          # anything but a 2xx.
+          cf() {
+            local code
+            code=$(curl -sS -o cf.out -w '%{http_code}' -H "X-Api-Token: $CF_API_KEY" "$@")
+            if [ "${code:0:1}" != 2 ]; then
+              echo "CurseForge answered $code: $(head -c 1000 cf.out)"
+              return 1
+            fi
+          }
+
+          # The TOC's interface number names the game version: 16001 is 1.60.1.
+          iface=$(tr -d '\r' < addon/OrcaWow/OrcaWow.toc | sed -n 's/^## Interface: *\([0-9]*\).*/\1/p')
+          gv="$((iface / 10000)).$((iface / 100 % 100)).$((iface % 100))"
+          cf https://wow.curseforge.com/api/game/versions
+          ids=$(jq -c --arg n "$gv" '[.[] | select(.name == $n) | .id]' cf.out)
+          echo "game version $gv: $ids"
+          if [ "$(jq length <<< "$ids")" != 1 ]; then
+            echo "Expected exactly one CurseForge game version called $gv. Versions with that interface's major and minor:"
+            jq -c --arg p "${gv%.*}." '[.[] | select(.name | startswith($p)) | {id, name, gameVersionTypeID}]' cf.out
+            exit 1
+          fi
+
+          v="${TAG#v}"
+          tr -d '\r' < CHANGELOG.md | awk -v v="$v" '/^## /{p = ($2 == v); next} p' > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for $v"; exit 1; }
+
+          zipname="OrcaWow-$TAG.zip"
+          (cd addon && zip -qr "../$zipname" OrcaWow)
+          meta=$(jq -n --rawfile notes notes.md --arg name "$TAG" --argjson ids "$ids" '{changelog: $notes, changelogType: "markdown", displayName: $name, gameVersions: $ids, releaseType: "release"}')
+          cf --form-string "metadata=$meta" -F "file=@$zipname" "https://wow.curseforge.com/api/projects/$CF_PROJECT_ID/upload-file"
+          echo "Uploaded $zipname: $(cat cf.out)"
