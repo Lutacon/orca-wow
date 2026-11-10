@@ -1,7 +1,7 @@
 // Finding the WoW: Forever install and the running client.
 //
 // On Linux the game runs under Wine or Proton, so we look through Wine prefixes. On
-// macOS it runs natively, from /Applications by default.
+// macOS and Windows it runs natively (from /Applications, or Program Files by default).
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -171,9 +171,55 @@ function macInstalls(system = '/') {
   return { forever, wowOnly, prefixes: battlenet };
 }
 
+// Windows: the game runs natively. Battle.net records install folders in product.db
+// (under ProgramData) and its default install folder in Battle.net.config (under
+// %APPDATA%); otherwise try the usual folders on every fixed drive. `env` and `drives`
+// stand in for the real ones in tests.
+function windowsDrives() {
+  const out = [];
+  for (const letter of 'CDEFGHIJ') {
+    const root = `${letter}:\\`;
+    try {
+      if (fs.existsSync(root)) out.push(root);
+    } catch {}
+  }
+  return out;
+}
+
+function windowsInstalls(env = process.env, drives = windowsDrives()) {
+  const dirs = [];
+  const add = (d) => {
+    if (!d) return;
+    const n = path.normalize(d.trim()).replace(/[\\/]+$/, '');
+    if (!dirs.some((x) => x.toLowerCase() === n.toLowerCase())) dirs.push(n);
+  };
+  const programData = env.ProgramData || env.PROGRAMDATA || 'C:\\ProgramData';
+  const appData = env.APPDATA || path.join(env.USERPROFILE || os.homedir(), 'AppData', 'Roaming');
+  try {
+    const db = fs.readFileSync(path.join(programData, 'Battle.net', 'Agent', 'product.db'), 'latin1');
+    for (const m of db.matchAll(/[A-Za-z]:[\\/][^\x00-\x1f"]*?World of Warcraft(?=[\x00-\x1f"]|$)/g)) add(Buffer.from(m[0], 'latin1').toString('utf8'));
+  } catch {}
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(appData, 'Battle.net', 'Battle.net.config'), 'utf8'));
+    const base = cfg?.Client?.Install?.DefaultInstallPath;
+    if (base) add(path.join(base, 'World of Warcraft'));
+  } catch {}
+  for (const pf of [env['ProgramFiles(x86)'], env.ProgramFiles]) if (pf) add(path.join(pf, 'World of Warcraft'));
+  for (const d of drives) {
+    for (const sub of ['Program Files (x86)', 'Program Files', 'Games', 'Juegos', 'Blizzard', '']) add(path.join(d, sub, 'World of Warcraft'));
+  }
+  const forever = [];
+  const wowOnly = [];
+  classify(dirs, forever, wowOnly);
+  const battlenet = [path.join(programData, 'Battle.net'), ...[env['ProgramFiles(x86)'], env.ProgramFiles].filter(Boolean).map((pf) => path.join(pf, 'Battle.net'))]
+    .filter((p) => fs.existsSync(p));
+  return { forever, wowOnly, prefixes: battlenet };
+}
+
 // { forever: [...WoW: Forever folders], wowOnly: [...WoW installs without Forever], prefixes: [...where Battle.net is] }
-export function findWowInstalls({ platform = process.platform, system } = {}) {
-  const { forever, wowOnly, prefixes } = platform === 'darwin' ? macInstalls(system) : linuxInstalls();
+export function findWowInstalls({ platform = process.platform, system, env, drives } = {}) {
+  const { forever, wowOnly, prefixes } =
+    platform === 'darwin' ? macInstalls(system) : platform === 'win32' ? windowsInstalls(env, drives) : linuxInstalls();
   return { forever, wowOnly: wowOnly.filter((w) => !forever.some((f) => f.startsWith(w + path.sep))), prefixes };
 }
 
@@ -191,10 +237,22 @@ export function isForeverClient(cmdline) {
   return /_forever_[\\/]+Wow(-arm64)?\.exe/i.test(cmdline);
 }
 
+// Windows: the helper lists processes whose name starts with "Wow" with their full
+// path and creation time ({ pid, start, path }); pick the Forever client.
+export function pickWindowsProcess(list) {
+  const p = (list || []).find((x) => isForeverClient(x.path || ''));
+  return p ? { pid: p.pid, startTicks: p.start } : null;
+}
+
 // The running Forever client: { pid, startTicks } or null. startTicks (from
-// /proc/<pid>/stat, or the start time on macOS) distinguishes a restarted client
-// that happens to reuse a pid.
-export function findWowProcess() {
+// /proc/<pid>/stat, the start time on macOS, the creation time on Windows)
+// distinguishes a restarted client that happens to reuse a pid. Async because on
+// Windows it asks the helper process.
+export async function findWowProcess() {
+  if (process.platform === 'win32') {
+    const { winHelper } = await import('./winhelper.js');
+    return pickWindowsProcess(await winHelper().processes());
+  }
   if (process.platform === 'darwin') return findMacProcess();
   let entries;
   try {

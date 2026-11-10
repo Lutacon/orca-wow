@@ -1,7 +1,7 @@
 // Text-to-speech and dictation on the desktop side.
 //
 // Speech: a configured command, else speech-dispatcher (`spd-say`), else espeak-ng,
-// else macOS's `say`.
+// else macOS's `say`; on Windows, the system voice (SAPI).
 // Dictation: record the mic with pw-record and transcribe with `voxtype transcribe`;
 // the bridge sends the text to the addon. Without those, fall back to Omarchy's
 // `omarchy-dictation`, which pastes into the focused window.
@@ -18,16 +18,41 @@ const EXTRA_PATHS = [
   path.join(os.homedir(), '.local/bin'),
 ];
 
+const WINDOWS = process.platform === 'win32';
+
 export function which(bin) {
-  for (const dir of [...(process.env.PATH || '').split(':'), ...EXTRA_PATHS]) {
+  const exts = WINDOWS ? ['', ...(process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';')] : [''];
+  for (const dir of [...(process.env.PATH || '').split(path.delimiter), ...(WINDOWS ? [] : EXTRA_PATHS)]) {
     if (!dir) continue;
-    const p = path.join(dir, bin);
-    try {
-      fs.accessSync(p, fs.constants.X_OK);
-      return p;
-    } catch {}
+    for (const ext of exts) {
+      const p = path.join(dir, bin + ext);
+      try {
+        fs.accessSync(p, fs.constants.X_OK);
+        if (fs.statSync(p).isFile()) return p;
+      } catch {}
+    }
   }
   return null;
+}
+
+// Windows' own voice (SAPI, through .NET's System.Speech), driven by the PowerShell
+// that ships with Windows; the text arrives on stdin so nothing needs quoting.
+const SAPI_SCRIPT = [
+  '[Console]::InputEncoding = [Text.Encoding]::UTF8',
+  'Add-Type -AssemblyName System.Speech',
+  '$s = New-Object System.Speech.Synthesis.SpeechSynthesizer',
+  '$s.Rate = [int]$env:ORCAWOW_TTS_RATE',
+  '$s.Speak([Console]::In.ReadToEnd())',
+].join('; ');
+
+function windowsPowerShell() {
+  const p = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  return fs.existsSync(p) ? p : null;
+}
+
+// The bridge's rate is words per minute on top of ~175; SAPI's is -10..10.
+export function sapiRate(rate) {
+  return Math.max(-10, Math.min(10, Math.round((rate || 0) / 20)));
 }
 
 export class Voice {
@@ -41,6 +66,10 @@ export class Voice {
 
   ttsEngine() {
     if (this.ttsCommand) return { kind: 'custom', cmd: this.ttsCommand };
+    if (WINDOWS) {
+      const ps = windowsPowerShell();
+      return ps ? { kind: 'sapi', cmd: ps } : null;
+    }
     const spd = which('spd-say');
     if (spd) return { kind: 'spd', cmd: spd };
     const espeak = which('espeak-ng') || which('espeak');
@@ -56,7 +85,7 @@ export class Voice {
       ? `omarchy-dictation (${this.backendName() || 'no backend set'})`
       : this.canTranscribe() ? 'voxtype' : null;
     return {
-      tts: e ? (e.kind === 'custom' ? 'custom' : path.basename(e.cmd)) : null,
+      tts: e ? (e.kind === 'custom' ? 'custom' : e.kind === 'sapi' ? 'Windows (SAPI)' : path.basename(e.cmd)) : null,
       dictation,
       // What to tell the player when there is nothing to dictate with; Omarchy's
       // dictation setup only exists on Linux.
@@ -66,6 +95,7 @@ export class Voice {
 
   dictationHint(platform = process.platform) {
     if (platform === 'darwin') return "Dictation isn't available on macOS yet.";
+    if (platform === 'win32') return "Dictation isn't available on Windows yet.";
     return 'No dictation backend found; pick one in Omarchy > Setup > Defaults > Dictation.';
   }
 
@@ -76,6 +106,7 @@ export class Voice {
       } catch {}
       this.current = null;
     }
+    if (WINDOWS) return;
     const spd = which('spd-say');
     if (spd) spawn(spd, ['--cancel'], { stdio: 'ignore' }).on('error', () => {});
   }
@@ -91,8 +122,17 @@ export class Voice {
     this.hush();
     let child;
     if (engine.kind === 'custom') {
-      child = spawn('/bin/sh', ['-c', engine.cmd], { stdio: ['pipe', 'ignore', 'ignore'] });
+      child = WINDOWS
+        ? spawn(engine.cmd, { shell: true, stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true })
+        : spawn('/bin/sh', ['-c', engine.cmd], { stdio: ['pipe', 'ignore', 'ignore'] });
       child.stdin.end(text);
+    } else if (engine.kind === 'sapi') {
+      child = spawn(engine.cmd, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', SAPI_SCRIPT], {
+        stdio: ['pipe', 'ignore', 'ignore'],
+        windowsHide: true,
+        env: { ...process.env, ORCAWOW_TTS_RATE: String(sapiRate(this.rate)) },
+      });
+      child.stdin.end(text, 'utf8');
     } else if (engine.kind === 'spd') {
       const args = ['--wait', '-e'];
       if (this.rate) args.push('-r', String(this.rate));
@@ -239,7 +279,7 @@ export class Voice {
 
   startRecording() {
     this.cancelRecording();
-    const file = path.join(os.tmpdir(), `t3wow-dictation-${process.pid}-${Date.now()}.wav`);
+    const file = path.join(os.tmpdir(), `orca-wow-dictation-${process.pid}-${Date.now()}.wav`);
     const [cmd, args] = this.recorder()(file);
     const child = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let stderr = '';

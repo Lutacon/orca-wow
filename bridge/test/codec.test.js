@@ -7,14 +7,14 @@ import { encodeFrame, decodeImage, renderCells, cellsToBytes, bytesToCells, MAX_
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const lua = ['lua5.1', 'luajit', 'lua'].find((bin) => {
-  try { execFileSync('which', [bin], { stdio: 'ignore' }); return true; } catch { return false; }
+  try { execFileSync(process.platform === 'win32' ? 'where' : 'which', [bin], { stdio: 'ignore' }); return true; } catch { return false; }
 });
 
 function luaCells(seq, payloadHex) {
   const script = `
     local ns = {}
-    local chunk = assert(loadfile(${JSON.stringify(path.join(root, 'addon/T3Code/Core/Codec.lua'))}))
-    chunk("T3Code", ns)
+    local chunk = assert(loadfile(${JSON.stringify(path.join(root, 'addon/OrcaWow/Core/Codec.lua'))}))
+    chunk("OrcaWow", ns)
     local hex = ${JSON.stringify(payloadHex)}
     local s = hex:gsub("..", function(h) return string.char(tonumber(h, 16)) end)
     local cells = ns.Codec.Encode(${seq}, s)

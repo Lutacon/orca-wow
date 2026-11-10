@@ -5,11 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 
 // Fake home with Wine prefixes, set before wow.js reads it.
-const home = fs.mkdtempSync(path.join(os.tmpdir(), 't3wow-home-'));
+const home = fs.mkdtempSync(path.join(os.tmpdir(), 'orca-wow-home-'));
 process.env.HOME = home;
 delete process.env.WINEPREFIX;
-const { findWowInstalls: findAny, parseMacProcesses, isForeverClient } = await import('../src/wow.js');
+const { findWowInstalls: findAny, parseMacProcesses, isForeverClient, pickWindowsProcess } = await import('../src/wow.js');
 const findWowInstalls = () => findAny({ platform: 'linux' });
+// The Wine-prefix tests fake a Linux home (HOME, symlinks); Windows takes its home
+// from USERPROFILE and needs admin rights for symlinks.
+const WINE_SKIP = process.platform === 'win32' && 'Wine prefixes are Linux only';
 
 function touch(p, content = '') {
   fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -24,14 +27,14 @@ function reset() {
 
 const omarchy = () => path.join(home, 'Games/battlenet');
 
-test("finds Forever in Omarchy's Battle.net prefix", () => {
+test("finds Forever in Omarchy's Battle.net prefix", { skip: WINE_SKIP }, () => {
   reset();
   touch(path.join(omarchy(), 'drive_c/Program Files (x86)/Battle.net/Battle.net.exe'));
   touch(path.join(omarchy(), 'drive_c/Program Files (x86)/World of Warcraft/_forever_/Wow.exe'));
   assert.deepEqual(findWowInstalls().forever, [path.join(omarchy(), 'drive_c/Program Files (x86)/World of Warcraft/_forever_')]);
 });
 
-test('finds the ARM client before its first launch', () => {
+test('finds the ARM client before its first launch', { skip: WINE_SKIP }, () => {
   reset();
   touch(path.join(omarchy(), 'drive_c/Program Files (x86)/World of Warcraft/_forever_/Wow-ARM64.exe'));
   assert.deepEqual(findWowInstalls().forever, [path.join(omarchy(), 'drive_c/Program Files (x86)/World of Warcraft/_forever_')]);
@@ -44,7 +47,7 @@ test('recognizes the running Forever client on x86 and ARM, not Retail', () => {
   assert.ok(!isForeverClient('C:\\Program Files (x86)\\World of Warcraft\\_forever_\\Utils\\WowVoiceProxy.exe\0'));
 });
 
-test("finds a custom install folder from Battle.net's records, including another drive", () => {
+test("finds a custom install folder from Battle.net's records, including another drive", { skip: WINE_SKIP }, () => {
   reset();
   touch(path.join(omarchy(), 'drive_c/ProgramData/Battle.net/Agent/product.db'),
     'junk\x00\x12(C:/Games/World of Warcraft\x00wowf\x00\x12"D:\\Blizzard\\World of Warcraft"');
@@ -59,7 +62,7 @@ test("finds a custom install folder from Battle.net's records, including another
   assert.deepEqual(r.wowOnly, [path.join(omarchy(), 'dosdevices/d:/Blizzard/World of Warcraft')]);
 });
 
-test('tells WoW without Forever apart from no WoW at all, and ignores other games\' prefixes', () => {
+test('tells WoW without Forever apart from no WoW at all, and ignores other games\' prefixes', { skip: WINE_SKIP }, () => {
   reset();
   touch(path.join(omarchy(), 'drive_c/Program Files (x86)/Battle.net/Battle.net.exe'));
   touch(path.join(omarchy(), 'drive_c/Program Files (x86)/World of Warcraft/_retail_/Wow.exe'));
@@ -75,7 +78,7 @@ test('tells WoW without Forever apart from no WoW at all, and ignores other game
   assert.deepEqual(r.prefixes, [omarchy()], 'only prefixes that really hold Battle.net');
 });
 
-test("finds prefixes Faugus Launcher and Lutris recorded, and counts a prefix's pfx link once", () => {
+test("finds prefixes Faugus Launcher and Lutris recorded, and counts a prefix's pfx link once", { skip: WINE_SKIP }, () => {
   reset();
   // A prefix Faugus recorded anywhere, here ~/Games itself.
   const games = path.join(home, 'Games');
@@ -104,7 +107,7 @@ test("finds prefixes Faugus Launcher and Lutris recorded, and counts a prefix's 
 
 test("finds Forever on macOS from Battle.net's records and /Applications", () => {
   reset();
-  const sys = fs.mkdtempSync(path.join(os.tmpdir(), 't3wow-sys-'));
+  const sys = fs.mkdtempSync(path.join(os.tmpdir(), 'orca-wow-sys-'));
   const mac = (opts) => findAny({ platform: 'darwin', system: sys, ...opts });
   touch(path.join(sys, 'Applications/Battle.net.app/Contents/Info.plist'));
   assert.deepEqual(mac().forever, []);
@@ -118,6 +121,57 @@ test("finds Forever on macOS from Battle.net's records and /Applications", () =>
   touch(path.join(sys, 'Volumes/Jeux Vidéo/World of Warcraft/_forever_/World of Warcraft.app/Contents/Info.plist'));
   assert.deepEqual(mac().forever, [path.join(sys, 'Volumes/Jeux Vidéo/World of Warcraft/_forever_')]);
   fs.rmSync(sys, { recursive: true, force: true });
+});
+
+test("finds Forever on Windows from Battle.net's records, its default folder, and the usual folders", () => {
+  const sys = fs.mkdtempSync(path.join(os.tmpdir(), 'orca-wow-win-'));
+  const env = {
+    ProgramData: path.join(sys, 'ProgramData'),
+    APPDATA: path.join(sys, 'Roaming'),
+    'ProgramFiles(x86)': path.join(sys, 'Program Files (x86)'),
+    ProgramFiles: path.join(sys, 'Program Files'),
+  };
+  const win = (drives = []) => findAny({ platform: 'win32', env, drives });
+  assert.deepEqual(win(), { forever: [], wowOnly: [], prefixes: [] });
+
+  // Battle.net installed, Retail only.
+  touch(path.join(env.ProgramData, 'Battle.net/Agent/product.db'), '');
+  touch(path.join(env['ProgramFiles(x86)'], 'World of Warcraft/_retail_/Wow.exe'));
+  let r = win();
+  assert.deepEqual(r.forever, []);
+  assert.deepEqual(r.wowOnly, [path.join(env['ProgramFiles(x86)'], 'World of Warcraft')]);
+  assert.deepEqual(r.prefixes, [path.join(env.ProgramData, 'Battle.net')]);
+
+  // Forever next to it.
+  touch(path.join(env['ProgramFiles(x86)'], 'World of Warcraft/_forever_/Wow.exe'));
+  assert.deepEqual(win().forever, [path.join(env['ProgramFiles(x86)'], 'World of Warcraft/_forever_')]);
+
+  // A custom folder recorded in product.db (forward slashes, like Battle.net writes).
+  const custom = path.join(sys, 'Juegos', 'World of Warcraft');
+  touch(path.join(custom, '_forever_/Wow.exe'));
+  touch(path.join(env.ProgramData, 'Battle.net/Agent/product.db'), `junk\x00\x12(${custom.replace(/\\/g, '/')}\x00wowf`);
+  assert.deepEqual(win().forever, [path.join(custom, '_forever_'), path.join(env['ProgramFiles(x86)'], 'World of Warcraft/_forever_')]);
+
+  // Battle.net's default install folder, and a drive's root.
+  const other = path.join(sys, 'D');
+  touch(path.join(env.APPDATA, 'Battle.net/Battle.net.config'), JSON.stringify({ Client: { Install: { DefaultInstallPath: path.join(sys, 'Blizz') } } }));
+  touch(path.join(sys, 'Blizz/World of Warcraft/_forever_/Wow.exe'));
+  touch(path.join(other, 'Games/World of Warcraft/_forever_/Wow.exe'));
+  r = win([other]);
+  assert.ok(r.forever.includes(path.join(sys, 'Blizz/World of Warcraft/_forever_')));
+  assert.ok(r.forever.includes(path.join(other, 'Games/World of Warcraft/_forever_')));
+  fs.rmSync(sys, { recursive: true, force: true });
+});
+
+test("picks the Forever client out of the Windows helper's process list", () => {
+  const list = [
+    { pid: 10, start: 1, path: 'C:\\Program Files (x86)\\World of Warcraft\\_retail_\\Wow.exe' },
+    { pid: 11, start: 2, path: 'C:\\Program Files (x86)\\World of Warcraft\\_forever_\\Utils\\WowVoiceProxy.exe' },
+    { pid: 12, start: 3, path: 'D:\\Juegos\\World of Warcraft\\_forever_\\Wow.exe' },
+  ];
+  assert.deepEqual(pickWindowsProcess(list), { pid: 12, startTicks: 3 });
+  assert.equal(pickWindowsProcess(list.slice(0, 2)), null);
+  assert.equal(pickWindowsProcess([]), null);
 });
 
 test('picks the Forever client out of macOS ps output', () => {

@@ -4,7 +4,8 @@
 // Hyprland (and other wlroots compositors) allow screencopy, so `grim` can read the
 // game's pixels on Wayland. KDE Plasma's KWin doesn't, but its ScreenShot2 D-Bus
 // interface does the same job. X11 sessions use ImageMagick's `import`. macOS uses its
-// own `screencapture`, which needs the Screen Recording permission.
+// own `screencapture`, which needs the Screen Recording permission. Windows uses a small
+// helper process built from native/wowhelper.cs (see winhelper.js).
 
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -13,10 +14,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { decodeImage, parsePPM, parseBMP, parseQImage, encodePNG, CELLS_PER_ROW, MAX_ROWS } from './codec.js';
 
+// process.getuid doesn't exist on Windows.
+const uid = () => (typeof process.getuid === 'function' ? process.getuid() : 0);
+
 // A service may start before the session exports WAYLAND_DISPLAY; find the socket.
 function captureEnv() {
-  if (process.env.WAYLAND_DISPLAY) return process.env;
-  const runtime = process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid()}`;
+  if (process.env.WAYLAND_DISPLAY || process.platform === 'win32') return process.env;
+  const runtime = process.env.XDG_RUNTIME_DIR || `/run/user/${uid()}`;
   try {
     const sock = fs.readdirSync(runtime).find((f) => /^wayland-\d+$/.test(f));
     if (sock) return { ...process.env, XDG_RUNTIME_DIR: runtime, WAYLAND_DISPLAY: sock };
@@ -37,12 +41,16 @@ function run(cmd, args, { maxBuffer = 32 * 1024 * 1024, timeout = 4000, input = 
 }
 
 function which(bin) {
-  for (const dir of (process.env.PATH || '').split(':')) {
-    const p = path.join(dir, bin);
-    try {
-      fs.accessSync(p, fs.constants.X_OK);
-      return p;
-    } catch {}
+  const exts = process.platform === 'win32' ? ['', ...(process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';')] : [''];
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const p = path.join(dir, bin + ext);
+      try {
+        fs.accessSync(p, fs.constants.X_OK);
+        if (fs.statSync(p).isFile()) return p;
+      } catch {}
+    }
   }
   return null;
 }
@@ -51,7 +59,8 @@ function which(bin) {
 // Hyprland IPC (no hyprctl spawn needed)
 
 function hyprSocket() {
-  const runtime = process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid()}`;
+  if (process.platform === 'win32') return null;
+  const runtime = process.env.XDG_RUNTIME_DIR || `/run/user/${uid()}`;
   const base = path.join(runtime, 'hypr');
   const sig = process.env.HYPRLAND_INSTANCE_SIGNATURE;
   if (sig && fs.existsSync(path.join(base, sig, '.socket.sock'))) return path.join(base, sig, '.socket.sock');
@@ -250,7 +259,7 @@ async function kwinCapture(method, signature, args, options, timeout = 4000) {
 }
 
 export const SCREEN_PERMISSION_HELP =
-  `macOS hasn't let the bridge record the screen. Open System Settings > Privacy & Security > Screen & System Audio Recording, turn on ${path.basename(process.execPath)} (${process.execPath}), then restart the bridge with: launchctl kickstart -k gui/${process.getuid()}/t3code-wow`;
+  `macOS hasn't let the bridge record the screen. Open System Settings > Privacy & Security > Screen & System Audio Recording, turn on ${path.basename(process.execPath)} (${process.execPath}), then restart the bridge with: launchctl kickstart -k gui/${uid()}/orca-wow`;
 
 // ---------------------------------------------------------------------------
 
@@ -271,6 +280,7 @@ export class StripCapture {
 
   resolveBackend() {
     if (this.backend !== 'auto') return this.backend;
+    if (process.platform === 'win32') return 'windows';
     if (process.platform === 'darwin') return 'macos';
     if (/(^|:)KDE(:|$)/.test(process.env.XDG_CURRENT_DESKTOP || '') && which('busctl')) return 'kwin';
     if (process.env.WAYLAND_DISPLAY || hyprSocket()) {
@@ -325,7 +335,7 @@ export class StripCapture {
   }
 
   tmpFile(name) {
-    if (!this.tmpDir || !fs.existsSync(this.tmpDir)) this.tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 't3code-wow-'));
+    if (!this.tmpDir || !fs.existsSync(this.tmpDir)) this.tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orca-wow-'));
     return path.join(this.tmpDir, name);
   }
 
@@ -351,6 +361,15 @@ export class StripCapture {
     this.stats.captures++;
     if (backend === 'none') throw new Error('no capture backend: install grim (Wayland/wlroots) or ImageMagick (X11); on KDE Plasma the bridge uses busctl from systemd');
     const px = StripCapture.stripPixels(4);
+    if (backend === 'windows') {
+      // The helper reads the client area, so there's no title bar to search past; it
+      // copies from the screen, or renders the window itself when something covers it.
+      const { winHelper } = await import('./winhelper.js');
+      if (!wowPid) return { status: 'no-window' };
+      const res = await winHelper().grab(wowPid, px.width, px.height);
+      if (res.status === 'hidden') this.stats.notVisible++;
+      return res;
+    }
     if (backend === 'macos') {
       let region = this.manualRegion;
       let scale = 1;
@@ -433,6 +452,13 @@ export class StripCapture {
   async screenshot(wowPid) {
     const backend = this.resolveBackend();
     const name = `wow-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.jpg`;
+    if (backend === 'windows') {
+      const { winHelper } = await import('./winhelper.js');
+      const res = await winHelper().shot(wowPid);
+      if (res.status === 'no-window') throw new Error("couldn't find the game window");
+      if (res.status === 'hidden') throw new Error('the game window is minimized');
+      return { data: encodePNG(res.image), name: name.replace(/\.jpg$/, '.png'), mime: 'image/png' };
+    }
     if (backend === 'kwin') {
       // KWin renders the window itself, so this works even while it's covered.
       const win = await this.kwinWindow(wowPid);
