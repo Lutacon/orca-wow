@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.4.1
 
 - The addon says once per session, and `/orca selftest` shows, when the bridge on your computer is a different version, with where to get the matching one.

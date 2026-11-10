@@ -1,10 +1,6 @@
-# Pushing a tag like v0.4.0 runs the tests, then publishes a GitHub release with
-# orca-wow-v0.4.0.zip (the repository without its development files, see
+# Pushing a tag like v0.4.0 runs the tests (tests.yml), then publishes a GitHub release
+# with orca-wow-v0.4.0.zip (the repository without its development files, see
 # .gitattributes) and that version's section of CHANGELOG.md as its notes.
-#
-# The bridge tests run on Windows, the platform this fork tests; the Lua side (the
-# addon's crypto agreeing with Node's, and the addon smoke test) runs on Linux, where
-# lua5.1 and luajit are a package away.
 name: Release
 
 on:
@@ -15,34 +11,11 @@ permissions:
   contents: write
 
 jobs:
-  bridge-tests:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-      - name: Bridge tests
-        working-directory: bridge
-        run: node --test test/*.test.js
-
-  lua-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-      - name: Lua
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.1 luajit
-      - name: Addon crypto agrees with the bridge's
-        working-directory: bridge
-        run: node --test test/crypto.test.js
-      - name: Addon smoke test
-        run: luajit tools/smoke.lua addon/OrcaWow tools/fixture_snapshot.lua
+  tests:
+    uses: ./.github/workflows/tests.yml
 
   release:
-    needs: [bridge-tests, lua-tests]
+    needs: tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

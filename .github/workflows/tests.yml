@@ -1,0 +1,45 @@
+# The tests, on every pull request and every push to main; the release workflow runs
+# them too before it publishes.
+#
+# The bridge tests run on Windows, the platform this fork tests; the Lua side (the
+# addon's crypto agreeing with Node's, and the addon smoke test) runs on Linux, where
+# lua5.1 and luajit are a package away.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  bridge:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Bridge tests
+        working-directory: bridge
+        run: node --test test/*.test.js
+
+  lua:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Lua
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.1 luajit
+      - name: Addon crypto agrees with the bridge's
+        working-directory: bridge
+        run: node --test test/crypto.test.js
+      - name: Addon smoke test (LuaJIT)
+        run: luajit tools/smoke.lua addon/OrcaWow tools/fixture_snapshot.lua
+      - name: Addon smoke test (Lua 5.1, unsigned bit ops like WoW)
+        run: lua5.1 tools/smoke.lua addon/OrcaWow tools/fixture_snapshot.lua

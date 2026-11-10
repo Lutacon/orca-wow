@@ -25,6 +25,8 @@ One problem per issue. If you're not sure it's a bug, say so and describe what y
 - **Say what changes and why**, in plain terms. Link the issue if there is one.
 - **Say how you verified it**: the tests you ran and what you checked in game, with what you saw. Mention anything you couldn't check. "Tests pass" alone isn't enough.
 - **Show UI changes.** Anything you can see in game needs before and after screenshots, and a short recording when motion, timing, controller navigation or interaction is part of the change. Drag them into the PR description so GitHub hosts them; never commit screenshots or recordings to the repo. If nothing visible changes, one line saying why is enough.
+- **Add a line to [CHANGELOG.md](CHANGELOG.md)** under `## Unreleased` (create it at the top if it isn't there) for anything a player or user would notice, written for them. Internal changes don't need one.
+- **The tests run on every PR** (`.github/workflows/tests.yml`): the bridge on Windows, the addon's Lua on Linux. Run them locally first (see below); a red check needs fixing before review.
 - **Commits** should be atomic, with short messages that describe the change.
 - AI-assisted contributions are fine. You're responsible for having read, run and checked the result, the same as any other change.
 

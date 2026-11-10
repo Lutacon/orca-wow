@@ -133,6 +133,10 @@ The details of the link with the game are in [docs/ARCHITECTURE.md](docs/ARCHITE
 - "Mark as done", "Reopen" and "Sleep" apply to the whole worktree.
 - Voice dictation isn't available on Windows yet.
 
+## Contributing
+
+Bug reports, ideas and pull requests are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) says what to include and how to test a change. Report security problems privately, through [GitHub's security advisories](https://github.com/Lutacon/orca-wow/security/advisories/new), not in a public issue.
+
 ## Credits
 
 - [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow) (MIT, © 2026 Ryan Hughes): the addon, the strip link, slots and bells, and the bridge this fork starts from.
