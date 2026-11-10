@@ -6,7 +6,9 @@
 local now = os.time()
 OrcaWow_Inbox = {
 	v = 1,
-	gen = now * 1000,
+	-- Fixed, not the clock: the addon re-runs this file whenever it loads a slot, and a
+	-- gen taken from the clock then would jump ahead of the one the test counts up from.
+	gen = 1000,
 	now = now,
 	nextSig = 2,
 	ack = { ui = "fixture", seq = 1 },
