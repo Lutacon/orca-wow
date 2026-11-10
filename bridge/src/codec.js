@@ -1,7 +1,7 @@
 // Pixel strip codec, shared with addon/OrcaWow/Core/Codec.lua.
 //
 // Frame bytes:
-//   [0x54 'T'] [0x33 '3'] [version] [seq hi, lo] [len hi, lo] [payload ...] [fletcher s1, s2]
+//   [0x4F 'O'] [0x57 'W'] [version] [seq hi, lo] [len hi, lo] [payload ...] [fletcher s1, s2]
 // The Fletcher-16 checksum covers version..payload. Bytes are packed MSB-first into
 // 3-bit cells. Each cell is a CELL x CELL square of physical pixels whose R, G and B
 // channels are each fully on or off (bit 2 = R, bit 1 = G, bit 0 = B), laid out
@@ -9,7 +9,7 @@
 
 import zlib from 'node:zlib';
 
-export const MAGIC = [0x54, 0x33];
+export const MAGIC = [0x4f, 0x57];
 export const VERSION = 1; // plaintext (only ever a hello: the bridge ignores commands in it)
 export const VERSIONS = new Set([1, 2]); // 2: encrypted, see strip-crypto.js
 export const BITS = 3;

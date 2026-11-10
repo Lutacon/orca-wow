@@ -1,5 +1,5 @@
--- A "T3 Code" section styled like the objective tracker: what's running, what needs
--- you, and what just finished. Click a line to open that thread.
+-- An "Orca" section styled like the objective tracker: what's running, what needs
+-- you, and what just finished. Click a line to open that agent.
 
 local _, ns = ...
 
@@ -135,7 +135,7 @@ function K:Create()
 			self.MinimizeButton:SetNormalAtlas(c and "common-button-list-plus" or "common-button-list-minus")
 		end
 	end
-	header.Text:SetText("T3 Code")
+	header.Text:SetText("Orca")
 	header:EnableMouse(true)
 	header:RegisterForDrag("LeftButton")
 	header:SetScript("OnDragStart", function()
@@ -178,14 +178,12 @@ function K:Refresh(resetPosition)
 		if #entries >= MAX_LINES then break end
 		if (t.s == "open" or t.s == "failed") and t.un then table.insert(entries, t) end
 	end
-	f.Header.Text:SetText(ns.AppName())
 	local state = ns.Transport:BridgeState()
 	local notice
 	if state == "exhausted" then
 		notice = { text = "Live updates paused", sub = "Click to /reload", action = function() ReloadUI() end }
-	elseif #entries > 0 and (state == "stale" or state == "t3offline") then
-		local offline = ns.Store:IsOrca() and "Orca is offline: open it on your computer" or "T3 Code is offline"
-		notice = { text = "Connection lost", sub = state == "stale" and "Is orca-wow running?" or offline }
+	elseif #entries > 0 and (state == "stale" or state == "offline") then
+		notice = { text = "Connection lost", sub = state == "stale" and "Is orca-wow running?" or "Orca is offline: open it on your computer" }
 	end
 
 	if #entries == 0 and not notice and not s.trackerAlways then

@@ -1,4 +1,4 @@
--- Right side of the window: the selected thread's conversation, what the agent is
+-- Right side of the window: the selected agent's conversation, what the agent is
 -- doing right now, and anything it is waiting on you for.
 
 local _, ns = ...
@@ -292,28 +292,23 @@ end
 function T:Elements()
 	local list = {}
 	local main = ns.Main
-	local orca = ns.Store:IsOrca()
 	if main.mode == "new" then
-		local withAgents = orca and main:ChosenNewAgent() ~= nil
-		local intro = orca
-			and (ns.Color("gold", "Start a new agent") .. "\n\nPick the project " .. (withAgents and "and the agent " or "") .. "above, describe the task in the box below and press "
-				.. ns.Color("white", "Start") .. ". Orca runs the agent on your computer, in a worktree of its own."
-				.. (withAgents and "\n\nThe worktree's name and base branch are optional: left empty, Orca names it after the task and branches from the repo's default branch." or ""))
-			or (ns.Color("gold", "Start a new thread") .. "\n\nPick the project above, describe the task in the box below and press "
-				.. ns.Color("white", "Start") .. ". The agent runs on your computer with your T3 Code defaults.")
+		local withAgents = main:ChosenNewAgent() ~= nil
+		local intro = ns.Color("gold", "Start a new agent") .. "\n\nPick the project " .. (withAgents and "and the agent " or "") .. "above, describe the task in the box below and press "
+			.. ns.Color("white", "Start") .. ". Orca runs the agent on your computer, in a worktree of its own."
+			.. (withAgents and "\n\nThe worktree's name and base branch are optional: left empty, Orca names it after the task and branches from the repo's default branch." or "")
 		table.insert(list, Note(intro, "common-icon-forwardarrow"))
 		return list
 	end
 	local id = ns.viewId
 	if not id then
 		local b = ns.Store.data.bridge or {}
-		local lines = { ns.Color("gold", ns.AppName()) .. (b.host and ns.Color("grey", "  on " .. b.host) or "") }
+		local lines = { ns.Color("gold", "Orca") .. (b.host and ns.Color("grey", "  on " .. b.host) or "") }
 		local active = ns.Store:Active()
-		local noun = orca and "agent" or "thread"
 		if #active > 0 then
-			table.insert(lines, string.format("\n%d %s%s need%s you or %s working.", #active, noun, #active == 1 and "" or "s", #active == 1 and "s" or "", #active == 1 and "is" or "are"))
+			table.insert(lines, string.format("\n%d agent%s need%s you or %s working.", #active, #active == 1 and "" or "s", #active == 1 and "s" or "", #active == 1 and "is" or "are"))
 		end
-		table.insert(lines, "\nPick " .. (orca and "an agent" or "a thread") .. " on the left to read it and reply, or start a new one.")
+		table.insert(lines, "\nPick an agent on the left to read it and reply, or start a new one.")
 		if ns.Gamepad:IsActive() then
 			table.insert(lines, "\n" .. ns.Gamepad:HelpText())
 		end
@@ -332,7 +327,7 @@ function T:Elements()
 		return list
 	end
 	if v.more then
-		table.insert(list, Note(ns.Color("grey", "Earlier messages are in " .. ns.AppName() .. "."), "common-icon-undo"))
+		table.insert(list, Note(ns.Color("grey", "Earlier messages are in Orca."), "common-icon-undo"))
 	end
 	local echo = self.echo[id]
 	for _, m in ipairs(v.msgs or {}) do
@@ -379,23 +374,18 @@ function T:Elements()
 					body = body .. "\n" .. ns.Color("white", p.detail)
 				end
 				table.insert(list, Note(body, "common-icon-forwardarrow"))
-				-- Orca relays the agent's own prompt, so use its words; the decisions are the same.
+				-- Orca relays the agent's own prompt, so use its words.
 				-- `al` is the agent's own "don't ask again" row, word for word, so the player
-				-- sees what it grants (it can cover more than this one request). An Orca menu
+				-- sees what it grants (it can cover more than this one request). A menu
 				-- without such a row gets no "don't ask again" button: the bridge refuses it.
 				-- `yl` is the row Yes presses, word for word, when it says more than "Yes"; a
 				-- long one is cut on the button, so the tooltip shows it whole.
 				local yesDesc = p.yl and "This picks the agent's own option, shown here word for word." or nil
-				table.insert(list, Option(orca and (p.yl or "Yes") or "Approve", Approve("accept"), yesDesc, { primary = true }))
+				table.insert(list, Option(p.yl or "Yes", Approve("accept"), yesDesc, { primary = true }))
 				if p.al then
 					table.insert(list, Option(p.al, Approve("acceptForSession"), "This is the agent's own option. It can allow more than this one request."))
-				elseif not orca then
-					table.insert(list, Option("Approve for this session", Approve("acceptForSession")))
 				end
-				if p.always and not p.al and not orca then
-					table.insert(list, Option("Always allow this", Approve("acceptAlways"), "Don't ask again for this command."))
-				end
-				table.insert(list, Option(orca and "No" or "Decline", Approve("decline")))
+				table.insert(list, Option("No", Approve("decline")))
 			end
 		elseif p.kind == "question" then
 			local req = self.answers[p.id] or {}
@@ -428,8 +418,7 @@ function T:Elements()
 		table.insert(list, Note(ns.Color("grey", v.sum), "common-icon-checkmark"))
 	end
 	if v.queued then
-		local untilWhen = orca and " queued until the agent is idle." or " queued until this run finishes."
-		table.insert(list, Note(ns.Color("orange", v.queued .. (v.queued == 1 and " follow-up is" or " follow-ups are") .. untilWhen), "common-icon-undo"))
+		table.insert(list, Note(ns.Color("orange", v.queued .. (v.queued == 1 and " follow-up is" or " follow-ups are") .. " queued until the agent is idle."), "common-icon-undo"))
 	end
 	if t and t.s == "working" then
 		table.insert(list, Note(ns.Color("agent", v.act or t.l or "Working"), "common-icon-undo", { spin = true, since = t.st, live = true }))

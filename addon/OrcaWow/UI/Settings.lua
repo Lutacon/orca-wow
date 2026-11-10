@@ -6,21 +6,19 @@ local UI = ns.UI
 local S = {}
 ns.Settings = S
 
--- `orca` / `orcaTip`: the wording when the bridge runs Orca.
 local CHECKS = {
-	{ key = "tracker", label = "Show T3 Code in the tracker area", orca = "Show Orca in the tracker area", after = function() ns.Tracker:Refresh() end },
+	{ key = "tracker", label = "Show Orca in the tracker area", after = function() ns.Tracker:Refresh() end },
 	{ key = "trackerAlways", label = "Keep its header when nothing is running", after = function() ns.Tracker:Refresh() end },
 	{ key = "trackerLocked", label = "Lock the tracker in place", after = function() ns.Tracker:Refresh() end },
-	{ key = "toasts", label = "Pop up a notice when a thread finishes or needs you", orca = "Pop up a notice when an agent finishes or needs you" },
+	{ key = "toasts", label = "Pop up a notice when an agent finishes or needs you" },
 	{ key = "sounds", label = "Play a sound with notices" },
 	{ key = "quietInstances", label = "Stay quiet in dungeons, raids and PvP", tip = "Notices and read-aloud wait until you're out. They always wait during combat.", after = function() ns.Transport:Touch() end },
 	{ key = "autoRead", label = "Read finished replies aloud", after = function() ns.Transport:Touch() end },
-	{ key = "steerFollowUps", label = "Steer a working thread with follow-ups", tip = "A message to a thread that's still working goes into its current run, as in T3 Code. Turn this off to queue it until the run finishes.",
-		orca = "Type follow-ups to a working agent right away", orcaTip = "A message to an agent that's still working is typed into its terminal straight away. Turn this off to hold it until the agent is idle.",
+	{ key = "steerFollowUps", label = "Type follow-ups to a working agent right away", tip = "A message to an agent that's still working is typed into its terminal straight away. Turn this off to hold it until the agent is idle.",
 		after = function() ns.Main:Refresh() end },
 	{ key = "dictateSend", label = "Send dictated messages right away" },
-	{ key = "quickReplies", label = "Show quick replies under finished threads", orca = "Show quick replies under finished agents", after = function() ns.Transcript:Refresh(true) end },
-	{ key = "gameMenu", label = "Add T3 Code to the game menu", orca = "Add Orca to the game menu" },
+	{ key = "quickReplies", label = "Show quick replies under finished agents", after = function() ns.Transcript:Refresh(true) end },
+	{ key = "gameMenu", label = "Add Orca to the game menu" },
 	{ key = "minimapButton", label = "Show the minimap button", after = function() ns.MinimapButton:Refresh() end },
 }
 
@@ -50,14 +48,9 @@ function S:Create(page)
 			if c.after then c.after() end
 		end)
 		cb.key = c.key
-		cb.check = c
 		cb.Text:SetWidth(400)
 		cb.Text:SetWordWrap(false)
-		if c.tip then
-			UI.Tooltip(cb, function(self) return self.Text:GetText() end, function()
-				return ns.Store:IsOrca() and c.orcaTip or c.tip
-			end)
-		end
+		if c.tip then UI.Tooltip(cb, c.label, c.tip) end
 		table.insert(self.checks, cb)
 		y = y - 28
 	end
@@ -76,7 +69,7 @@ function S:Create(page)
 	dd:SetOptions(options, ns.db.settings.tts)
 	self.voice = dd
 	local test = UI.Button(page, "Test voice", 110, function()
-		ns.Speak("Hello from " .. ns.AppName() .. ". This is how replies will sound.", "", "test")
+		ns.Speak("Hello from Orca. This is how replies will sound.", "", "test")
 	end)
 	test:SetPoint("LEFT", dd, "RIGHT", 10, 0)
 	y = y - 40
@@ -120,9 +113,7 @@ function S:Create(page)
 	UI.Tooltip(selftest, "Run self-test", "Checks the link to your desktop step by step and prints what's wrong, if anything.")
 	local report = UI.Button(page, "Report a problem", 150, function() ns.Main:ShowPage("threads") ns.Main:Report() end)
 	report:SetPoint("LEFT", selftest, "RIGHT", 10, 0)
-	UI.Tooltip(report, "Report a problem", function()
-		return "Puts diagnostics in the message box and attaches a screenshot, for the " .. (ns.Store:IsOrca() and "agent" or "thread") .. " you have open (or a new one)."
-	end)
+	UI.Tooltip(report, "Report a problem", "Puts diagnostics in the message box and attaches a screenshot, for the agent you have open (or a new one).")
 	self.controls = { dd, size, test, reload, resetTracker, selftest, report }
 end
 
@@ -136,10 +127,8 @@ local SIGNAL_TEXT = {
 
 function S:Refresh()
 	if not self.page then return end
-	local orca = ns.Store:IsOrca()
 	for _, cb in ipairs(self.checks) do
 		cb:SetChecked(ns.db.settings[cb.key] and true or false)
-		cb.Text:SetText(orca and cb.check.orca or cb.check.label)
 	end
 	self.voice.value = ns.db.settings.tts
 	self.voice:Update()
@@ -148,17 +137,17 @@ function S:Refresh()
 	local T = ns.Transport
 	local b = ns.Store.data.bridge or {}
 	-- Orca offline with no reason given: say what to do about it.
-	local hint = b.t3err or (orca and b.t3 ~= "connected" and b.t3 ~= "connecting" and "open Orca on your computer") or nil
+	local hint = b.err or (b.orca ~= "connected" and b.orca ~= "connecting" and "open Orca on your computer") or nil
 	local lines = {
 		"Bridge: " .. (b.version and ns.Color("green", "orca-wow " .. b.version) or ns.Color("red", "not heard from")),
-		ns.AppName() .. ": " .. (b.t3 == "connected" and ns.Color("green", "connected" .. (b.server and (" (" .. b.server .. ")") or "")) or ns.Color("red", b.t3 or "unknown"))
+		"Orca: " .. (b.orca == "connected" and ns.Color("green", "connected") or ns.Color("red", b.orca or "unknown"))
 			.. (hint and ns.Color("grey", " — " .. hint) or ""),
 		(function()
 			if not b.envs then return "Machines: this computer only " .. ns.Color("grey", "(add more with orca-wow env add <host>)") end
 			local parts = {}
 			for _, e in ipairs(b.envs) do
 				local ok = e.state == "connected"
-				table.insert(parts, ns.Color(ok and "green" or "red", e.label) .. ns.Color("grey", string.format(" (%s)", ok and (e.n .. (orca and " agents" or " threads")) or e.state)))
+				table.insert(parts, ns.Color(ok and "green" or "red", e.label) .. ns.Color("grey", string.format(" (%s)", ok and (e.n .. " agents") or e.state)))
 			end
 			return "Machines: " .. table.concat(parts, ", ")
 		end)(),
@@ -181,26 +170,23 @@ end)
 -- Options > AddOns entry that opens the real settings tab.
 ns:On("Login", function()
 	if not Settings or not Settings.RegisterCanvasLayoutCategory then return end
-	-- Named once, here: the bootstrap snapshot has usually arrived by now (Transport
-	-- loads it on Login, before this file's handler runs).
-	local app = ns.AppName()
 	local panel = CreateFrame("Frame")
 	local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
 	title:SetPoint("TOPLEFT", 16, -16)
-	title:SetText(app)
+	title:SetText("Orca")
 	local text = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
 	text:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
-	text:SetText("Watch and run your " .. app .. " agents from inside the game. Type /orca to open the window.")
+	text:SetText("Watch and run your Orca agents from inside the game. Type /orca to open the window.")
 	local open = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
 	open:SetSize(200, 24)
 	open:SetPoint("TOPLEFT", text, "BOTTOMLEFT", 0, -16)
-	open:SetText("Open " .. app .. " settings")
+	open:SetText("Open Orca settings")
 	open:SetScript("OnClick", function()
 		if SettingsPanel and SettingsPanel:IsShown() then HideUIPanel(SettingsPanel) end
 		ns.Main:Open()
 		ns.Main:ShowPage("settings")
 	end)
-	local category = Settings.RegisterCanvasLayoutCategory(panel, app)
+	local category = Settings.RegisterCanvasLayoutCategory(panel, "Orca")
 	Settings.RegisterAddOnCategory(category)
 	ns.settingsCategory = category
 end)

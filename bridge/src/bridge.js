@@ -1,5 +1,5 @@
 // The bridge: watches the addon's pixel strip, keeps the game's live-update slots
-// fed with a snapshot of T3 Code, and runs the addon's commands against T3.
+// fed with a snapshot of Orca's agents, and runs the addon's commands against Orca.
 //
 // Protocol (see docs/ARCHITECTURE.md):
 //   game -> bridge   pixel frame: records split by RS, fields by US
@@ -15,12 +15,9 @@ import { createHash } from 'node:crypto';
 import { RS, US } from './codec.js';
 import { StripCapture } from './capture.js';
 import { SlotBank } from './slots.js';
-import { threadStatus, isUnread, effortOf } from './t3.js';
-import { Fleet } from './fleet.js';
-import { tokenProvider } from './auth.js';
+import { threadStatus, isUnread } from './threads.js';
 import { OrcaFleet } from './orca-fleet.js';
 import { Voice } from './voice.js';
-import { OmarchyUsage, mergeUsage } from './usage.js';
 import { findWowProcess, processKey } from './wow.js';
 import { markdownToWow, markdownToSpeech, firstLine, escapeWow } from './format.js';
 import { loadOrCreateKey, deriveKeys, open as openSealed, ENCRYPTED_VERSION } from './strip-crypto.js';
@@ -118,11 +115,9 @@ export function pendingRequest(projection) {
     auth_refresh: 'Sign in again',
   };
   // Orca reads the agent's own menu: `alwaysLabel` is its "don't ask again" row (null
-  // when it has none), which the game shows word for word instead of a generic
-  // "Always allow this", and `yesLabel` the row Yes presses, shown when it says more
-  // than "Yes". `atComputer`: a request the game may only decline (`pc`), and why
-  // (`pcw`).
-  const fromMenu = item ? 'alwaysLabel' in item : false;
+  // when it has none), which the game shows word for word, and `yesLabel` the row Yes
+  // presses, shown when it says more than "Yes". `atComputer`: a request the game may
+  // only decline (`pc`), and why (`pcw`).
   const label = (s) => escapeWow(String(s).slice(0, 200));
   return {
     id: req.id,
@@ -130,7 +125,6 @@ export function pendingRequest(projection) {
     what: item?.wait && item.atComputer ? item.toolName : labels[req.kind] || req.kind,
     detail: escapeWow(String(detail).slice(0, 1200)),
     files,
-    always: (req.kind === 'command' && !fromMenu) || undefined,
     yl: item?.yesLabel && !/^yes\.?$/i.test(item.yesLabel) ? label(item.yesLabel) : undefined,
     al: item?.alwaysLabel ? label(item.alwaysLabel) : undefined,
     pc: item?.atComputer || undefined,
@@ -173,11 +167,6 @@ export function proposedPlan(projection) {
   return plan ? plan.markdown : null;
 }
 
-// How the game names a model: instance and slug, joined by a tab (neither contains one).
-export function modelKey(instanceId, model) {
-  return `${instanceId}\t${model}`;
-}
-
 export function parseFrame(payload) {
   const records = payload.toString('utf8').split(RS).map((r) => r.split(US));
   const out = { hello: null, commands: [] };
@@ -194,7 +183,6 @@ export function parseFrame(payload) {
         view: f[8] || '',
         version: f[9] || '',
         slots: Number(f[10]) || 0,
-        models: f[11] || '',
       };
     } else if (f[0] === 'C') {
       out.commands.push({ id: Number(f[1]), verb: f[2], args: f.slice(3) });
@@ -208,7 +196,7 @@ export function parseFrame(payload) {
 // Stop is one Escape the player expects at once, so it doesn't wait behind a message
 // being typed (Orca can hold one for up to 30 s); orca.js still keeps it out of the
 // middle of an answer's keys (withKeyLock).
-const THREAD_VERBS = new Set(['send', 'approve', 'answer', 'model', 'settle', 'unsettle', 'archive', 'read']);
+const THREAD_VERBS = new Set(['send', 'approve', 'answer', 'settle', 'unsettle', 'archive', 'read']);
 export function commandQueueKey(cmd) {
   if (THREAD_VERBS.has(cmd.verb)) return cmd.args[0] ? `t:${cmd.args[0]}` : null;
   if (cmd.verb === 'shot' || cmd.verb === 'unshot') return cmd.args[0] ? `t:${cmd.args[0]}` : 'new';
@@ -216,15 +204,9 @@ export function commandQueueKey(cmd) {
   return null;
 }
 
-// T3 Code's schema errors ("Missing key\n  at [\"reason\"]") mean this bridge and
-// the T3 server disagree about a request; say that, not the raw validator text.
+// What the game shows for a failed command: the first line of the error.
 export function friendlyError(message) {
-  const text = String(message || 'failed');
-  if (/Missing key|Expected .*(Literal|Struct|Union)|is unexpected|Unexpected key/.test(text)) {
-    const field = /at \[\"?([^\]"]+)/.exec(text)?.[1];
-    return `T3 Code didn't accept that request${field ? ` (it wants "${field}")` : ''}. Update orca-wow to match your T3 Code version.`;
-  }
-  return text.split('\n')[0].slice(0, 200);
+  return String(message || 'failed').split('\n')[0].slice(0, 200);
 }
 
 export class Bridge {
@@ -245,20 +227,9 @@ export class Bridge {
     this.bank.pin();
     this.halted = null; // why publishing stopped for good (a folder was replaced)
     this.capture = new StripCapture({ log: this.log, backend: config.capture?.backend || 'auto', region: config.capture?.region || null });
-    // The agents' backend: Orca by default; the original T3 Code backend stays
-    // available with `"backend": "t3"` in config.json. `this.t3` keeps its old name:
-    // both clients expose the same interface (see orca.js).
-    this.backend = config.backend === 't3' ? 't3' : 'orca';
-    if (this.backend === 't3') {
-      this.tokens = tokenProvider({ log: this.log });
-      // Every T3 Code machine we show: this one, plus any added with `orca-wow env add`.
-      this.t3 = new Fleet({ localTokens: this.tokens, environments: config.environments || [], log: this.log });
-    } else {
-      // This PC's Orca (unless `orca.local` is false) plus any paired with
-      // `orca-wow remote add` (`orca.remotes`; their secrets live in CONFIG_DIR/remotes).
-      this.t3 = new OrcaFleet({ log: this.log, stateDir, ...(config.orca || {}) });
-    }
-    this.backendName = this.backend === 't3' ? 'T3' : 'Orca';
+    // This PC's Orca (unless `orca.local` is false) plus any paired with
+    // `orca-wow remote add` (`orca.remotes`; their secrets live in CONFIG_DIR/remotes).
+    this.agents = new OrcaFleet({ log: this.log, stateDir, ...(config.orca || {}) });
     this.voice = new Voice({ ttsCommand: config.tts?.command || null, rate: config.tts?.rate || 0, log: this.log });
     this.stateDir = stateDir;
     this.stateFile = path.join(stateDir, 'state.json');
@@ -273,7 +244,6 @@ export class Bridge {
     this.proc = null;
     this.views = new Map(); // threadId -> { projection, fetchedAt, inflight, again }
     this.results = [];
-    this.omarchyUsage = new OmarchyUsage({ log: this.log, onChange: () => this.markDirty('minor') });
     this.shots = new Map(); // thread key (or 'new') -> screenshots waiting for the next message
     this.lastPublishAt = 0;
     this.lastGen = this.persist.gen || 0;
@@ -314,19 +284,17 @@ export class Bridge {
     }
     const v = this.voice.describe();
     this.log(`speech: ${v.tts || 'none'}; dictation: ${v.dictation || 'none'}; capture: ${this.capture.resolveBackend()}`);
-    this.t3.on('state', (s, e) => {
-      this.log(`${this.backendName}: ${s}${e ? ` (${e})` : ''}`);
+    this.agents.on('state', (s, e) => {
+      this.log(`Orca: ${s}${e ? ` (${e})` : ''}`);
       this.markDirty('important');
     });
-    this.t3.on('change', (ev) => this.onT3Change(ev));
-    this.t3.on('config', () => this.markDirty('minor'));
-    this.t3.start();
+    this.agents.on('change', (ev) => this.onAgentsChange(ev));
+    this.agents.on('config', () => this.markDirty('minor'));
+    this.agents.start();
     this.checkProcess();
     this.procTimer = setInterval(() => this.checkProcess(), 4000);
     this.statusTimer = setInterval(() => this.writeStatus(), 3000);
     this.waitTimer = setInterval(() => this.recheckWait(), 3000);
-    // Pick up new Omarchy usage records (the shell's Agents panel refreshes them).
-    this.usageTimer = setInterval(() => this.omarchyUsage.refresh(this.usageInstances()), 60000);
     this.capture.prepare();
     this.captureLoop();
   }
@@ -336,9 +304,8 @@ export class Bridge {
     clearInterval(this.procTimer);
     clearInterval(this.statusTimer);
     clearInterval(this.waitTimer);
-    clearInterval(this.usageTimer);
     clearTimeout(this.publishTimer);
-    this.t3.stop();
+    this.agents.stop();
     this.voice.hush();
   }
 
@@ -486,8 +453,6 @@ export class Bridge {
     c.confirmedAt = Date.now();
     this.persist.confirmedSlot = hello.slot;
     c.version = hello.version;
-    // Which model list the addon holds; it's only sent again when this differs.
-    c.modelsHash = hello.models;
     c.lastSeen = Date.now();
     this.persist.slotGuess = c.slotNext;
 
@@ -551,7 +516,7 @@ export class Bridge {
       switch (cmd.verb) {
         case 'send': {
           const attachments = await this.takeShots(a0, a0);
-          await this.t3.sendMessage(a0, a1, a2 || 'auto', attachments);
+          await this.agents.sendMessage(a0, a1, a2 || 'auto', attachments);
           msg = attachments.length ? `Sent with ${attachments.length} screenshot${attachments.length === 1 ? '' : 's'}` : 'Sent';
           break;
         }
@@ -569,51 +534,38 @@ export class Bridge {
           ok = null;
           break;
         case 'new': {
-          // T3:   new <project> <text> [<instanceId> <model> [<effort>]]; the model is
-          //       empty when only the reasoning level was picked.
-          // Orca: new <project> <text> [<agent> [<worktree name> [<base branch>]]]; empty
-          //       fields mean Orca's defaults.
+          // new <project> <text> [<agent> [<worktree name> [<base branch>]]]; empty
+          // fields mean Orca's defaults.
           const attachments = await this.takeShots('new', a0);
           const opts = {};
-          if (this.backend === 'orca') {
-            const [, , agent, name, baseBranch] = cmd.args;
-            if (agent) opts.agent = agent;
-            if (name) opts.name = name;
-            if (baseBranch) opts.baseBranch = baseBranch;
-          } else {
-            const [, , instanceId, model, effort] = cmd.args;
-            if (instanceId && model) opts.model = { instanceId, model };
-            if (effort) opts.effort = effort;
-          }
-          const res = await this.t3.launchThread(a0, a1, attachments, opts);
-          msg = 'Thread started';
+          const [, , agent, name, baseBranch] = cmd.args;
+          if (agent) opts.agent = agent;
+          if (name) opts.name = name;
+          if (baseBranch) opts.baseBranch = baseBranch;
+          const res = await this.agents.launchThread(a0, a1, attachments, opts);
+          msg = 'Agent started';
           if (res?.threadId) this.results.push({ id: cmd.id, ok: true, open: res.threadId });
           break;
         }
-        case 'model':
-          // model <thread> <instanceId> <model> [<effort>]
-          await this.t3.setModel(a0, a1, a2, cmd.args[3] || undefined);
-          msg = 'Model changed';
-          break;
         case 'stop':
-          await this.t3.interrupt(a0);
+          await this.agents.interrupt(a0);
           msg = 'Stopped';
           break;
         case 'settle':
-          await this.t3.settle(a0);
+          await this.agents.settle(a0);
           break;
         case 'unsettle':
-          await this.t3.unsettle(a0);
+          await this.agents.unsettle(a0);
           break;
         case 'archive':
-          await this.t3.archive(a0);
+          await this.agents.archive(a0);
           break;
         case 'read':
-          await this.t3.visit(a0);
+          await this.agents.visit(a0);
           ok = null; // silent
           break;
         case 'approve':
-          await this.t3.respondApproval(a0, a1, a2 || 'accept');
+          await this.agents.respondApproval(a0, a1, a2 || 'accept');
           break;
         case 'answer': {
           const answers = {};
@@ -623,7 +575,7 @@ export class Bridge {
             if (answers[qid] === undefined) answers[qid] = value;
             else answers[qid] = [].concat(answers[qid], value);
           }
-          await this.t3.respondAnswers(a0, a1, answers);
+          await this.agents.respondAnswers(a0, a1, answers);
           break;
         }
         case 'speak': {
@@ -711,12 +663,12 @@ export class Bridge {
     if (!list?.length) return [];
     this.shots.delete(key);
     const out = [];
-    for (const img of list) out.push(await this.t3.uploadImage(routeKey, img.data, img.name, img.mime));
+    for (const img of list) out.push(await this.agents.uploadImage(routeKey, img.data, img.name, img.mime));
     return out;
   }
 
   async speechFor(threadId, which) {
-    const t = this.t3.threads.get(threadId);
+    const t = this.agents.threads.get(threadId);
     const proj = await this.projection(threadId);
     let text = lastAssistantText(proj);
     if (which === 'plan') {
@@ -754,7 +706,7 @@ export class Bridge {
     }
     const wait = force ? 0 : Math.max(0, minGap - (Date.now() - v.fetchedAt));
     v.inflight = new Promise((r) => setTimeout(r, wait))
-      .then(() => this.t3.threadProjection(threadId))
+      .then(() => this.agents.threadProjection(threadId))
       .then((p) => {
         const prevLabel = activityLabel(v.projection);
         const prevContent = v.contentKey;
@@ -795,15 +747,15 @@ export class Bridge {
   // every few seconds, and publish only when its request changed.
   recheckWait() {
     const id = this.client?.view;
-    if (!id || this.backend !== 'orca') return null;
-    const t = this.t3.threads.get(id);
+    if (!id) return null;
+    const t = this.agents.threads.get(id);
     if (!t || threadStatus(t) !== 'input') return null;
     const v = this.views.get(id);
     if (v && (v.inflight || Date.now() - v.fetchedAt < 2500)) return null;
     return this.refreshView(id, true, { quiet: true });
   }
 
-  onT3Change(ev) {
+  onAgentsChange(ev) {
     if (ev.kind === 'thread') {
       const t = ev.thread;
       const status = threadStatus(t);
@@ -820,7 +772,7 @@ export class Bridge {
       }
     } else {
       if (ev.kind === 'snapshot') {
-        for (const t of this.t3.threads.values()) {
+        for (const t of this.agents.threads.values()) {
           this.prevStatus.set(t.id, threadStatus(t));
           if (ACTIVE.has(threadStatus(t))) this.refreshView(t.id);
         }
@@ -852,18 +804,14 @@ export class Bridge {
     }
   }
 
-  usageInstances() {
-    return (this.t3.config?.providers || []).filter((p) => p.enabled).map((p) => p.instanceId);
-  }
-
   // ---------------------------------------------------------------------------
   // Snapshot
 
   buildSnapshot() {
-    const t3 = this.t3;
+    const agents = this.agents;
     const projects = [];
     const usedProjects = new Set();
-    let threads = [...t3.threads.values()]
+    let threads = [...agents.threads.values()]
       .map((t) => ({ t, s: threadStatus(t) }))
       .filter(({ s }) => s !== 'archived');
     threads.sort((a, b) => ORDER[a.s] - ORDER[b.s] || Date.parse(b.t.updatedAt) - Date.parse(a.t.updatedAt));
@@ -893,26 +841,19 @@ export class Bridge {
         st: sec(t.activityRunStartedAt || t.latestRunStartedAt),
         un: s !== 'settled' && isUnread(t) ? true : undefined,
         br: t.branch ? escapeWow(t.branch) : undefined,
-        m: t.modelSelection?.model,
-        mi: t.modelSelection?.instanceId,
-        re: effortOf(t.modelSelection),
         env: t._env && !t._env.local ? escapeWow(t._env.label) : undefined,
         last: last && ACTIVE.has(s) === false && s !== 'settled' ? escapeWow(firstLine(last, 160)) : undefined,
       };
     });
-    for (const p of t3.projects.values()) {
+    for (const p of agents.projects.values()) {
       if (p.archivedAt) continue;
       const remote = p._env && !p._env.local ? p._env.label : null;
       const name = p.title || p.repositoryIdentity?.displayName || 'Project';
-      const dm = t3.defaultModelFor(p.id);
       projects.push({
         id: p.id,
         name: escapeWow(remote ? `${name} · ${remote}` : name),
         env: remote ? escapeWow(remote) : undefined,
         act: usedProjects.has(p.id) || undefined,
-        // The model a new thread here gets unless the player picks one.
-        dm: dm?.instanceId && dm.model ? modelKey(dm.instanceId, dm.model) : undefined,
-        de: effortOf(dm),
       });
     }
     projects.sort((a, b) => (b.act ? 1 : 0) - (a.act ? 1 : 0) || a.name.localeCompare(b.name));
@@ -921,7 +862,7 @@ export class Bridge {
     const viewId = this.client?.view;
     if (viewId) {
       const v = this.views.get(viewId);
-      const t = t3.threads.get(viewId);
+      const t = agents.threads.get(viewId);
       if (v?.projection) {
         const p = v.projection;
         const msgs = (p.messages || []).filter((m) => (m.role === 'user' || m.role === 'assistant') && m.text?.trim());
@@ -952,77 +893,37 @@ export class Bridge {
     }
 
     const voice = this.voice.describe();
-    const models = this.modelsSection();
-
-    const usage = [];
-    this.omarchyUsage.refresh(this.usageInstances());
-    const enabled = (t3.config?.providers || []).filter((p) => p.enabled && (p.usageLimits || this.omarchyUsage.forInstance(p.instanceId)));
-    for (const p of enabled) {
-      usage.push(mergeUsage(p, this.omarchyUsage.forInstance(p.instanceId), { escape: escapeWow, sec }));
-    }
 
     return {
       bridge: {
         version: VERSION,
-        backend: this.backend,
-        t3: t3.state,
-        t3err: t3.error ? escapeWow(t3.error) : undefined,
-        server: t3.config?.environment?.serverVersion ? escapeWow(String(t3.config.environment.serverVersion)) : undefined,
-        host: t3.config?.environment?.label ? escapeWow(String(t3.config.environment.label)) : undefined,
+        orca: agents.state,
+        err: agents.error ? escapeWow(agents.error) : undefined,
+        // The names of the computers whose Orca is connected.
+        host: agents.config?.environment?.label ? escapeWow(String(agents.config.environment.label)) : undefined,
         tts: voice.tts || undefined,
         dictation: voice.dictation || undefined,
         dictationHint: voice.hint || undefined,
         slots: this.bank.slots,
-        envs: t3.envs.length > 1 ? t3.environments().map((e) => ({ label: escapeWow(e.label), state: e.state, local: e.local, n: e.threads })) : undefined,
+        envs: agents.envs.length > 1 ? agents.environments().map((e) => ({ label: escapeWow(e.label), state: e.state, local: e.local, n: e.threads })) : undefined,
       },
       projects,
       threads: list,
-      older: t3.olderSettled || undefined,
+      older: agents.olderSettled || undefined,
       view,
-      usage,
       dict: this.dictation,
       newShots: this.shots.get('new')?.length || undefined,
-      // ~100 models is several KB, so only when the addon doesn't hold this list yet.
-      models: models && this.client?.modelsHash !== models.h ? models : undefined,
-      // Orca: the agents a new worktree can start with ({ i, l }) and the preselected one.
-      agents: this.t3.agentChoices ? this.agentsSection() : undefined,
+      // The agents a new worktree can start with ({ i, l }) and the preselected one.
+      agents: this.agentsSection(),
       results: this.results.slice(-8).map(({ id, ok, msg, open }) => ({ id, ok, msg, open })),
     };
   }
 
   agentsSection() {
-    const { list, default: def } = this.t3.agentChoices();
+    const { list, default: def } = this.agents.agentChoices();
     return { d: def, o: list.map((a) => ({ i: a.id, l: escapeWow(a.label) })) };
   }
 
-  // Every machine's model list for the game's model picker, with a short hash the
-  // addon reports back in its hello. Per machine (`e`): its providers (`p`), each
-  // with its models, and the distinct sets of reasoning levels (`x`) those models
-  // point at by 1-based index (`r`), since most models of a provider share one.
-  modelsSection() {
-    const groups = this.t3
-      .modelGroups()
-      .filter((g) => g.choices.length)
-      .map((g) => {
-        const x = [];
-        const sets = new Map();
-        const providers = new Map();
-        for (const c of g.choices) {
-          let r;
-          if (c.effort) {
-            const set = { k: c.effort.id, d: c.effort.default, o: c.effort.options.map((o) => ({ i: o.id, l: escapeWow(o.label) })) };
-            const key = JSON.stringify(set);
-            if (!sets.has(key)) sets.set(key, x.push(set));
-            r = sets.get(key);
-          }
-          if (!providers.has(c.instanceId)) providers.set(c.instanceId, { i: c.instanceId, n: escapeWow(c.provider.replace(/\s+/g, ' ').trim()), m: [] });
-          providers.get(c.instanceId).m.push({ s: c.model, l: escapeWow(c.name), r });
-        }
-        return { e: g.code, x, p: [...providers.values()] };
-      });
-    // An empty list still gets a hash, so the addon drops models that are gone.
-    return { h: createHash('sha1').update(JSON.stringify(groups)).digest('hex').slice(0, 8), g: groups };
-  }
 
   // ---------------------------------------------------------------------------
   // Publishing
@@ -1194,9 +1095,8 @@ export class Bridge {
       version: VERSION,
       pid: process.pid,
       at: new Date().toISOString(),
-      backend: this.backend,
       halted: this.halted || undefined,
-      t3: { state: this.t3.state, error: this.t3.error, threads: this.t3.threads.size, origin: this.t3.origin, environments: this.t3.environments() },
+      orca: { state: this.agents.state, error: this.agents.error, threads: this.agents.threads.size, origin: this.agents.origin, environments: this.agents.environments() },
       wow: this.proc ? { pid: this.proc.pid } : null,
       capture: { state: this.captureState, backend: this.capture.resolveBackend(), ...this.capture.stats, lastError: this.capture.lastError },
       addon: this.client

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { OrcaClient, readRuntime, parseMenu, threadIdFor, projectIdFor, questionFromMenu, claudeAnswerKeys, codexAnswerKeys, refNameProblem, SHELL_REFUSED } from '../src/orca.js';
-import { threadStatus, isUnread } from '../src/t3.js';
+import { threadStatus, isUnread } from '../src/threads.js';
 import { pendingRequest, activityLabel, runSummary } from '../src/bridge.js';
 import { FakeOrca, tempDir, worktreeRow, agentRow } from './support/fake-orca.js';
 
@@ -88,16 +88,13 @@ test('connects and turns worktrees and agents into threads and projects', async 
   assert.equal(client.config.environment.serverVersion, '1.4.300');
   assert.equal(client.origin, orca.endpoint);
   assert.deepEqual(client.environments(), [{ code: '', label: 'Orca', local: true, state: 'connected', error: undefined, threads: 2 }]);
-  assert.deepEqual(client.modelGroups(), []);
-  assert.equal(client.defaultModelFor(), null);
-  assert.throws(() => client.setModel(), /choose their own model/);
   // Ids are stable across polls.
   const before = [...client.threads.keys()].sort();
   await waitFor(() => orca.callsOf('worktree.ps').length >= 3);
   assert.deepEqual([...client.threads.keys()].sort(), before);
 });
 
-test('maps agent states onto T3 thread statuses', async (t) => {
+test('maps agent states onto thread statuses', async (t) => {
   const done = Date.now() - 5000;
   const { client } = await setup(t, (o) => {
     o.worktrees = [

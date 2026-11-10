@@ -1,4 +1,4 @@
--- Left side of the window: project filter and the grouped thread list.
+-- Left side of the window: project filter and the grouped agent list.
 
 local _, ns = ...
 local UI = ns.UI
@@ -11,7 +11,7 @@ local LIST_W_DEFAULT = 280
 local GROUPS = {
 	{ key = "working", label = "Working" },
 	{ key = "open", label = "Open" },
-	{ key = "settled", label = "Settled" },
+	{ key = "settled", label = "Done" }, -- Orca's "Mark done"
 }
 
 local DOT_COLORS = {
@@ -87,10 +87,6 @@ local function CreateRow(button)
 		GameTooltip:AddLine(ns.Store:ProjectName(t.p), 0.7, 0.7, 0.7)
 		GameTooltip:AddLine(t.l or ns.Store.StatusText(t.s), 1, 1, 1, true)
 		if t.br then GameTooltip:AddLine("Branch: " .. t.br, 0.6, 0.8, 1) end
-		if t.m then
-			local label = t.mi and ns.Store:ModelLabel(ns.Store.EnvOf(t.id), ns.Store.ModelKey(t.mi, t.m)) or t.m
-			GameTooltip:AddLine(label, 0.6, 0.6, 0.6)
-		end
 		if t.last then
 			GameTooltip:AddLine(" ")
 			GameTooltip:AddLine(t.last, 0.9, 0.9, 0.9, true)
@@ -219,15 +215,12 @@ function L:Refresh(force)
 	self:SetupDropdown()
 
 	local groups = ns.Store:Groups(s.project, self.query)
-	local orca = ns.Store:IsOrca()
 	local dp = CreateDataProvider()
 	for _, g in ipairs(GROUPS) do
 		local list = groups[g.key]
 		local collapsed = s.collapsed[g.key]
 		if #list > 0 or g.key ~= "settled" then
-			-- Orca's "Mark done" is T3's settle.
-			local label = (orca and g.key == "settled") and "Done" or g.label
-			dp:Insert({ header = true, key = g.key, label = label, count = #list, collapsed = collapsed })
+			dp:Insert({ header = true, key = g.key, label = g.label, count = #list, collapsed = collapsed })
 			if not collapsed then
 				for _, t in ipairs(list) do dp:Insert({ thread = t }) end
 				if #list == 0 then
@@ -239,8 +232,7 @@ function L:Refresh(force)
 	if ns.Store.applied == 0 then
 		dp:Insert({ empty = "Waiting for the bridge…" })
 	elseif (ns.Store.data.older or 0) > 0 and not s.collapsed.settled then
-		local fmt = orca and "+%d older done agents in Orca" or "+%d older settled threads in T3 Code"
-		dp:Insert({ empty = string.format(fmt, ns.Store.data.older) })
+		dp:Insert({ empty = string.format("+%d older done agents in Orca", ns.Store.data.older) })
 	end
 	self.scrollBox:SetDataProvider(dp, ScrollBoxConstants.RetainScrollPosition)
 	ns:Fire("ListRebuilt")

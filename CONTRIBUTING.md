@@ -2,9 +2,9 @@
 
 Contributions are welcome. This is an early, experimental release, so bug reports from real use are just as valuable as code.
 
-This repository is [Lutacon/orca-wow](https://github.com/Lutacon/orca-wow), a fork of [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow) by Ryan Hughes, which built the addon, the strip link, the slots and bells, and the bridge this fork starts from. The fork adds Windows and the Orca backend.
+This repository is [Lutacon/orca-wow](https://github.com/Lutacon/orca-wow), a fork of [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow) by Ryan Hughes, which built the addon, the strip link, the slots and bells, and the bridge this fork starts from. The fork adds Windows and connects the addon to Orca.
 
-The tested setup is **Windows 10 or 11**, **Orca** (on the same PC, or on another computer through an access link) and **World of Warcraft: Forever** from Battle.net. Linux (Omarchy, CachyOS with KDE Plasma, the game under Proton), macOS and the T3 Code backend come from upstream and are kept, but aren't tested here. Changes that make other setups work are welcome, as long as they don't break Windows.
+The tested setup is **Windows 10 or 11**, **Orca** (on the same PC, or on another computer through an access link) and **World of Warcraft: Forever** from Battle.net. Linux (Omarchy, CachyOS with KDE Plasma, the game under Proton) and macOS come from upstream and are kept, but aren't tested here. Changes that make other setups work are welcome, as long as they don't break Windows.
 
 ## Issues
 
@@ -12,7 +12,7 @@ Open an issue for a bug you can reproduce, or for a specific idea. Keep it detai
 
 For a bug, include:
 
-- **Versions**: Windows (`winver`), Orca (its About screen; on every computer involved), orca-wow (`orca-wow status`), and your controller if it's involved. On Linux or macOS, the OS version (`omarchy-version`, `sw_vers`) and, with the T3 Code backend, `t3 --version`.
+- **Versions**: Windows (`winver`), Orca (its About screen; on every computer involved), orca-wow (`orca-wow status`), and your controller if it's involved. On Linux or macOS, the OS version (`omarchy-version`, `sw_vers`).
 - **What you did, what you expected, what happened instead.** Steps to reproduce if you have them.
 - **`orca-wow status --log`** output, and the text from `/orca report` in game. Check it for paths and machine names you'd rather not share.
 - **A screenshot or short video** for anything you can see: a layout problem, a wrong state, a notice that didn't appear. It's often the fastest way to explain the problem.

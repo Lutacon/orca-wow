@@ -1,6 +1,6 @@
 // Several Orcas behind the single-client interface the bridge uses: this PC's (over
 // its pipe, unless turned off) plus any paired with `orca-wow remote add` (over
-// Orca's encrypted WebSocket, orca-remote.js). Modelled on fleet.js (T3 Code).
+// Orca's encrypted WebSocket, orca-remote.js).
 //
 // Ids stay unique across machines: this PC's keep their raw ids (so saved views and
 // state stay valid), other machines' get a short prefix ("e1~<id>"). Every thread
@@ -258,18 +258,6 @@ export class OrcaFleet extends EventEmitter {
 
   visit(key) {
     return this.route(key, (c, id) => c.visit(id));
-  }
-
-  setModel() {
-    throw new Error("Orca's agents choose their own model");
-  }
-
-  defaultModelFor() {
-    return null;
-  }
-
-  modelGroups() {
-    return [];
   }
 
   // The new-worktree picker, from the first machine that's connected.

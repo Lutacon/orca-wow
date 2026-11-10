@@ -1,5 +1,5 @@
--- The T3 Code window: a standard portrait frame with the thread list on the left,
--- the selected thread on the right, and side tabs for usage and settings.
+-- The Orca window: a standard portrait frame with the agent list on the left, the
+-- selected agent on the right, and side tabs for the agents and settings.
 
 local _, ns = ...
 local UI = ns.UI
@@ -43,7 +43,7 @@ function M:Create()
 	f:SetClampedToScreen(true)
 	f:EnableMouse(true)
 	f:Hide()
-	f:SetTitle("T3 Code")
+	f:SetTitle("Orca")
 	f:SetPortraitToAsset(ns.media .. "portrait")
 	tinsert(UISpecialFrames, "OrcaWowFrame")
 
@@ -66,7 +66,7 @@ function M:Create()
 		f:SetPoint(wp[1], UIParent, wp[2], wp[3], wp[4])
 	end
 
-	-- Subtitle: the thread you're looking at, and the link status under it.
+	-- Subtitle: the agent you're looking at, and the link status under it.
 	f.Subtitle = UI.Text(f, "GameFontNormalLarge", "CENTER")
 	f.Subtitle:SetPoint("TOP", 20, -30)
 	f.Subtitle:SetWidth(WIDTH - 220)
@@ -75,10 +75,8 @@ function M:Create()
 	f.Status:SetPoint("TOP", f.Subtitle, "BOTTOM", 0, -2)
 	f.Status:SetWidth(WIDTH - 220)
 
-	-- Collapse the thread list (arrow under the close button).
-	f.SidebarToggle = UI.IconButton(f, "common-icon-backarrow", 24, function()
-		return ns.Store:IsOrca() and "Hide the agent list" or "Hide the thread list"
-	end, function() M:ToggleSidebar() end)
+	-- Collapse the agent list (arrow under the close button).
+	f.SidebarToggle = UI.IconButton(f, "common-icon-backarrow", 24, "Hide the agent list", function() M:ToggleSidebar() end)
 	if not f.SidebarToggle.Icon:GetAtlas() then f.SidebarToggle.Icon:SetAtlas("common-dropdown-icon-back") end
 	f.SidebarToggle:SetPoint("TOPRIGHT", -10, -32)
 
@@ -93,8 +91,6 @@ function M:Create()
 	f.Pages.threads = CreateFrame("Frame", nil, f.Inset)
 	f.Pages.threads:SetAllPoints()
 	self:CreateThreadsPage(f.Pages.threads)
-	f.Pages.usage = CreateFrame("Frame", nil, f.Inset)
-	f.Pages.usage:SetAllPoints()
 	f.Pages.settings = CreateFrame("Frame", nil, f.Inset)
 	f.Pages.settings:SetAllPoints()
 
@@ -103,9 +99,8 @@ function M:Create()
 
 	-- Side tabs.
 	f.Tabs = {
-		CreateSideTab(f, 1, ns.media .. "icon", "Threads", "threads"),
-		CreateSideTab(f, 2, "Interface\\Icons\\INV_Scroll_08", "Usage limits", "usage"),
-		CreateSideTab(f, 3, "Interface\\Icons\\INV_Misc_Gear_01", "Settings", "settings"),
+		CreateSideTab(f, 1, ns.media .. "icon", "Agents", "threads"),
+		CreateSideTab(f, 2, "Interface\\Icons\\INV_Misc_Gear_01", "Settings", "settings"),
 	}
 
 	f:SetScript("OnShow", ns.Safe(function()
@@ -125,14 +120,13 @@ function M:Create()
 	end))
 
 	self:ApplyScale()
-	ns.Usage:Create(f.Pages.usage)
 	ns.Settings:Create(f.Pages.settings)
 	self:ShowPage("threads")
 	return f
 end
 
 function M:CreateThreadsPage(page)
-	-- Left: project filter + thread list.
+	-- Left: project filter + agent list.
 	local left = CreateFrame("Frame", nil, page)
 	left:SetPoint("TOPLEFT")
 	left:SetPoint("BOTTOMLEFT")
@@ -168,9 +162,9 @@ function M:CreateThreadsPage(page)
 	header.Text:SetPoint("LEFT", 12, 0)
 	header.Text:SetPoint("RIGHT", -110, 0)
 	header.Text:SetWordWrap(false)
-	header.Action = UI.Button(header, "Settle", 96, function() M:HeaderAction() end)
+	header.Action = UI.Button(header, "Mark done", 96, function() M:HeaderAction() end)
 	header.Action:SetPoint("RIGHT", -4, 0)
-	header.Archive = UI.Button(header, "Archive", 86, function()
+	header.Archive = UI.Button(header, "Sleep worktree", 124, function()
 		if ns.viewId then
 			ns.Transport:Send("archive", ns.viewId)
 			PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF)
@@ -178,35 +172,14 @@ function M:CreateThreadsPage(page)
 	end)
 	header.Archive:SetPoint("RIGHT", header.Action, "LEFT", -4, 0)
 	header.Archive:Hide()
-	UI.Tooltip(header.Archive, function()
-		return ns.Store:IsOrca() and "Sleep worktree" or "Archive"
-	end, function()
-		if ns.Store:IsOrca() then
-			return "Stops the terminals in this agent's worktree in Orca, the agent included. The worktree and its branch stay."
-		end
-		return "Hide this thread from the list (it stays in T3 Code's archive)."
-	end)
+	UI.Tooltip(header.Archive, "Sleep worktree",
+		"Stops the terminals in this agent's worktree in Orca, the agent included. The worktree and its branch stay.")
 	header.Project = UI.Dropdown(header, 176, function(value)
 		M.newProject = value
-		M.newModel, M.newEffort = nil, nil
 		M:Refresh()
 	end)
 	header.Project:SetPoint("RIGHT", -6, 0)
 	header.Project:Hide()
-	-- The model: for the new thread, or the open thread's next runs. Only a deliberate
-	-- pick from the list changes it (no wheel or right-click stepping), because each
-	-- change on a thread is a command to T3.
-	local function ListOnly(dd)
-		dd:SetScript("OnClick", function(self) UI.OpenList(self) end)
-		dd:EnableMouseWheel(false)
-		dd:SetScript("OnMouseWheel", nil)
-		dd:Hide()
-		return dd
-	end
-	header.Model = ListOnly(UI.Dropdown(header, 176, function(value) M:PickModel(value) end))
-	header.Model.listWidth = 300 -- room for "Model · Provider" rows
-	-- How hard the model reasons, when it has levels to pick from.
-	header.Effort = ListOnly(UI.Dropdown(header, 92, function(value) M:PickEffort(value) end))
 	right.Header = header
 	right.NewOptions = self:CreateNewOptions(right, header)
 
@@ -372,7 +345,7 @@ function M:CreateButtonBar(f)
 	bar.Refresh:SetPoint("BOTTOMLEFT", 6, 4)
 	UI.Tooltip(bar.Refresh, "Refresh", "Ask the bridge for a fresh update now.")
 
-	bar.New = UI.Button(f, "New Thread", 130, function() M:StartNewThread() end)
+	bar.New = UI.Button(f, "New agent", 130, function() M:StartNewThread() end)
 	bar.New:SetPoint("LEFT", bar.Refresh, "RIGHT", 60, 0)
 
 	bar.Back = UI.Button(f, "Back", 110, function() M:Back() end)
@@ -426,30 +399,16 @@ end
 
 function M:ShowPage(page)
 	local f = self.frame
-	if page == "usage" and ns.Store:IsOrca() then page = "threads" end -- Orca reports no usage
+	if not f.Pages[page] then page = "threads" end
 	self.page = page
 	for name, p in pairs(f.Pages) do p:SetShown(name == page) end
 	for _, tab in ipairs(f.Tabs) do tab:SetChecked(tab.page == page) end
 	local threads = page == "threads"
 	for _, key in ipairs({ "Back", "Stop", "Mic", "Speak", "Shot", "Send" }) do f.Bar[key]:SetShown(threads) end
 	f.SidebarToggle:SetShown(threads)
-	if page == "usage" then ns.Usage:Refresh() end
 	if page == "settings" then ns.Settings:Refresh() end
 	self:Refresh()
 	ns:Fire("PageChanged", page)
-end
-
--- Orca reports no usage limits: drop that tab and move Settings up into its place.
-function M:UpdateTabs()
-	local f = self.frame
-	local orca = ns.Store:IsOrca()
-	f.Tabs[1].tooltipText = orca and "Agents" or "Threads"
-	if self.tabsOrca == orca then return end
-	self.tabsOrca = orca
-	f.Tabs[2]:SetShown(not orca)
-	f.Tabs[3]:ClearAllPoints()
-	f.Tabs[3]:SetPoint("TOPLEFT", f, "TOPRIGHT", 0, -36 - (orca and 1 or 2) * 48)
-	if orca and self.page == "usage" then self:ShowPage("threads") end
 end
 
 function M:ToggleSidebar(show)
@@ -537,7 +496,7 @@ function M:StartNewThread(projectId)
 	self:Create()
 	self:SaveDraft()
 	self.mode = "new"
-	self.newModel, self.newEffort, self.newAgent = nil, nil, nil
+	self.newAgent = nil
 	local filter = ns.db.settings.project
 	self.newProject = projectId or (filter ~= "all" and filter) or ns.db.settings.lastProject
 	if not ns.Store.projectsById[self.newProject or ""] then
@@ -583,13 +542,13 @@ function M:Send(textOverride)
 	end
 	if self.mode == "new" then
 		if not self.newProject then
-			ns.Print(ns.Store:IsOrca() and "Pick a project for the new agent first." or "Pick a project for the new thread first.")
+			ns.Print("Pick a project for the new agent first.")
 			return
 		end
 		local agent = self:ChosenNewAgent()
 		if agent then
-			-- Orca: new <project> <text> <agent> [<worktree name> [<base branch>]],
-			-- with "" for a name left empty before a branch, and no trailing empties.
+			-- new <project> <text> <agent> [<worktree name> [<base branch>]], with ""
+			-- for a name left empty before a branch, and no trailing empties.
 			local name, branch = self:NewWorktreeFields()
 			if not ns.Store.ValidWorktreeName(name) then
 				self:UpdateNewOptions()
@@ -611,15 +570,9 @@ function M:Send(textOverride)
 			self.pendingNewFields = { text = text, name = name, branch = branch }
 			self:ClearNewWorktreeFields()
 		else
+			-- A bridge that offers no agents: Orca picks the agent.
 			ns.db.settings.lastProject = self.newProject
-			local instanceId, slug = ns.Store.SplitModelKey(self:ChosenNewModel())
-			local effort = self:ChosenNewEffort()
-			if effort then
-				-- An empty model means T3 Code's default, at this level.
-				self.pendingNew = ns.Transport:Send("new", self.newProject, text, instanceId or "", slug or "", effort)
-			else
-				self.pendingNew = ns.Transport:Send("new", self.newProject, text, instanceId, slug)
-			end
+			self.pendingNew = ns.Transport:Send("new", self.newProject, text)
 			self.pendingNewFields = nil
 		end
 		ns.db.drafts.__new = nil
@@ -634,7 +587,7 @@ function M:Send(textOverride)
 		ns.Transcript:AddLocalEcho(ns.viewId, text)
 		ns.db.drafts[ns.viewId] = nil
 	else
-		ns.Print(ns.Store:IsOrca() and "Pick an agent, or start a new one." or "Pick a thread, or start a new one.")
+		ns.Print("Pick an agent, or start a new one.")
 		return
 	end
 	if not textOverride then
@@ -669,8 +622,7 @@ end
 function M:AttachScreenshot()
 	local key = self:ShotKey()
 	if not key then
-		ns.Print(ns.Store:IsOrca() and "Open an agent (or start a new one) first, then attach the screenshot."
-			or "Open a thread (or start a new one) first, then attach the screenshot.")
+		ns.Print("Open an agent (or start a new one) first, then attach the screenshot.")
 		return
 	end
 	ns.Transport:Send("shot", key)
@@ -688,8 +640,8 @@ function M:Report(note)
 	if not ns.viewId and self.mode ~= "new" then self:StartNewThread() end
 	local T = ns.Transport
 	local b = ns.Store.data.bridge or {}
-	local lines = { "--- " .. ns.AppName() .. " for World of Warcraft diagnostics ---" }
-	table.insert(lines, string.format("addon %s, bridge %s, %s %s (%s)", ns.version, b.version or "?", ns.Store:IsOrca() and "Orca" or "T3", b.t3 or "?", b.server or "?"))
+	local lines = { "--- Orca for World of Warcraft diagnostics ---" }
+	table.insert(lines, string.format("addon %s, bridge %s, Orca %s", ns.version, b.version or "?", b.orca or "?"))
 	table.insert(lines, string.format("link %s, signals %s via %s, live updates left %d/%d, queued %d", T:BridgeState(), T.signals, tostring(T.channel), T:SlotsLeft(), T.slotCount, #T.queue))
 	if b.envs then
 		local m = {}
@@ -748,7 +700,6 @@ local LINK_TEXT = {
 	connected = { "green", "Connected" },
 	waiting = { "orange", "Waiting for the bridge… (run orca-wow install on your desktop)" },
 	stale = { "red", "Bridge not responding — is orca-wow running?" },
-	t3offline = { "red", "Bridge connected, but T3 Code is offline" },
 	exhausted = { "orange", "Live updates paused — /reload to resume" },
 }
 
@@ -760,8 +711,8 @@ function M:StatusLine()
 	local state = T:BridgeState()
 	local entry = LINK_TEXT[state] or LINK_TEXT.waiting
 	local text = ns.Color(entry[1], entry[2])
-	if state == "t3offline" and ns.Store:IsOrca() then
-		if ns.Store.data.bridge.t3 == "connecting" then
+	if state == "offline" then
+		if ns.Store.data.bridge.orca == "connecting" then
 			text = ns.Color("orange", "Orca: connecting…")
 		else
 			text = ns.Color("red", "Orca: offline") .. ns.Color("grey", " — open Orca on your computer")
@@ -806,10 +757,6 @@ function M:Refresh()
 	if not f or not f:IsShown() then return end
 	f.Status:SetText(self:StatusLine())
 	self:UpdateRefreshButton()
-	local orca = ns.Store:IsOrca()
-	f:SetTitle(ns.AppName())
-	self:UpdateTabs()
-	f.Bar.New:SetText(orca and "New agent" or "New Thread")
 
 	local right = f.Pages.threads.Right
 	local header = right.Header
@@ -818,33 +765,14 @@ function M:Refresh()
 		local agent = self:SetupAgentDropdown()
 		self:LayoutNewOptions(agent ~= nil)
 		if agent then self:UpdateNewOptions() end
-		if orca then
-			local project = ns.Store:ProjectName(self.newProject)
-			local what = agent and ("New " .. ns.Store:AgentLabel(agent) .. " agent") or "New agent"
-			f.Subtitle:SetText(project ~= "" and (what .. " in " .. project) or what)
-		else
-			f.Subtitle:SetText("New Thread")
-		end
-		header.Text:SetText(ns.Color("gold", orca and "New agent in" or "New thread in"))
+		local project = ns.Store:ProjectName(self.newProject)
+		local what = agent and ("New " .. ns.Store:AgentLabel(agent) .. " agent") or "New agent"
+		f.Subtitle:SetText(project ~= "" and (what .. " in " .. project) or what)
+		header.Text:SetText(ns.Color("gold", "New agent in"))
 		header.Action:Hide()
 		header.Archive:Hide()
 		header.Project:Show()
 		self:SetupProjectDropdown()
-		local withModel = self:SetupModelDropdown()
-		local withEffort = withModel and self:SetupEffortDropdown()
-		if not withEffort then header.Effort:Hide() end
-		header.Model.tipBody = "The model the new thread starts on. It's remembered for this project."
-		header.Effort.tipBody = "How hard the model reasons on the new thread. It's remembered for this project."
-		header.Effort:ClearAllPoints()
-		header.Effort:SetPoint("RIGHT", -6, 0)
-		header.Model:ClearAllPoints()
-		header.Model:SetPoint("RIGHT", withEffort and header.Effort or header, withEffort and "LEFT" or "RIGHT", withEffort and -4 or -6, 0)
-		header.Project:ClearAllPoints()
-		if withModel then
-			header.Project:SetPoint("RIGHT", header.Model, "LEFT", -6, 0)
-		else
-			header.Project:SetPoint("RIGHT", -6, 0)
-		end
 		header.Text:ClearAllPoints()
 		header.Text:SetPoint("LEFT", 12, 0)
 		header.Text:SetPoint("RIGHT", header.Project, "LEFT", -8, 0)
@@ -866,35 +794,17 @@ function M:Refresh()
 			local age = (t.s == "working" and t.st) and ns.Duration(time() - t.st) or ns.Ago(t.u)
 			header.Text:SetText(string.format("%s  ·  %s  ·  %s", status, ns.Store:ProjectName(t.p), age))
 			header.Action:SetShown(true)
-			header.Action:SetText(t.s == "settled" and "Reopen" or (orca and "Mark done" or "Settle"))
-			header.Archive:SetText(orca and "Sleep worktree" or "Archive")
-			header.Archive:SetWidth(orca and 124 or 86)
+			header.Action:SetText(t.s == "settled" and "Reopen" or "Mark done")
 			header.Archive:SetShown(t.s == "settled")
-			local withModel = self:SetupModelDropdown()
-			local withEffort = withModel and self:SetupEffortDropdown()
-			if not withEffort then header.Effort:Hide() end
-			header.Model.tipBody = "The model for this thread. A change applies from the next reply on."
-			header.Effort.tipBody = "How hard the model reasons on this thread. A change applies from the next reply on."
-			local anchor = t.s == "settled" and header.Archive or header.Action
-			header.Effort:ClearAllPoints()
-			header.Effort:SetPoint("RIGHT", anchor, "LEFT", -4, 0)
-			header.Model:ClearAllPoints()
-			header.Model:SetPoint("RIGHT", withEffort and header.Effort or anchor, "LEFT", -4, 0)
-			local pickers = (withModel and header.Model:GetWidth() + 4 or 0) + (withEffort and header.Effort:GetWidth() + 4 or 0)
-			header.Text:SetPoint("RIGHT", (t.s == "settled" and -(114 + header.Archive:GetWidth()) or -110) - pickers, 0)
-			local busy = ns.db.settings.steerFollowUps and "Steer the agent" or "Queue a follow-up"
-			if orca then
-				-- Orca types into the agent's terminal: now, or once it's idle.
-				busy = ns.db.settings.steerFollowUps and "Type to the agent now" or "Send when the agent is idle"
-			end
+			header.Text:SetPoint("RIGHT", t.s == "settled" and -(114 + header.Archive:GetWidth()) or -110, 0)
+			-- Orca types into the agent's terminal: now, or once it's idle.
+			local busy = ns.db.settings.steerFollowUps and "Type to the agent now" or "Send when the agent is idle"
 			self:SetPlaceholder((t.s == "working" and busy or "Message the agent") .. "  (Shift+Enter for a new line)")
 		else
-			f.Subtitle:SetText(ns.Color("grey", orca and "No agent selected" or "No thread selected"))
-			header.Text:SetText(ns.Color("grey", orca and "Pick an agent on the left, or start a new one" or "Pick a thread on the left, or start a new one"))
+			f.Subtitle:SetText(ns.Color("grey", "No agent selected"))
+			header.Text:SetText(ns.Color("grey", "Pick an agent on the left, or start a new one"))
 			header.Action:Hide()
 			header.Archive:Hide()
-			header.Model:Hide()
-			header.Effort:Hide()
 		end
 		right.Hint:SetText(self:ShotHint() or (ns.Gamepad and ns.Gamepad:IsActive() and ns.Gamepad:HintText()) or "")
 	end
@@ -912,166 +822,11 @@ function M:Refresh()
 end
 
 ---------------------------------------------------------------------------
--- Model picker
-
--- The model the player picked for the new thread, now or last time in this project.
--- Nil means T3 Code picks when the thread starts.
-function M:ChosenNewModel()
-	if ns.Store:IsOrca() then return nil end -- Orca's agents choose their own model
-	if self.newModel then return self.newModel end
-	local saved = self.newProject and ns.db.models[self.newProject]
-	if ns.Store:Offers(ns.Store.EnvOf(self.newProject), saved) then return saved end
-end
-
--- What the picker shows: the chosen model, else T3 Code's default for the project.
-function M:NewThreadModel()
-	local chosen = self:ChosenNewModel()
-	if chosen then return chosen end
-	local env = ns.Store.EnvOf(self.newProject)
-	local p = ns.Store.projectsById[self.newProject or ""]
-	if p and p.dm then return p.dm end
-	for _, o in ipairs(ns.Store:ModelOptions(env) or {}) do
-		if not o.header then return o.value end
-	end
-end
-
--- The open thread's model, or the one just picked for it until T3 confirms it.
-function M:ThreadModel(t)
-	local current = ns.Store.ModelKey(t.mi, t.m)
-	local pending = self.pendingModel
-	if pending and pending.thread == t.id then
-		if pending.value == current or GetTime() - pending.at > 30 then
-			self.pendingModel = nil
-		else
-			return pending.value
-		end
-	end
-	return current
-end
-
--- Fill the model dropdown for what's on screen. Returns whether it's shown.
-function M:SetupModelDropdown()
-	local dd = self.frame.Pages.threads.Right.Header.Model
-	-- Orca's agents choose their own model (and a list from an earlier T3 bridge may
-	-- still be held), so no picker there.
-	if ns.Store:IsOrca() then
-		dd:Hide()
-		return false
-	end
-	local env, current
-	if self.mode == "new" then
-		env, current = ns.Store.EnvOf(self.newProject), self:NewThreadModel()
-	else
-		local t = ns.Store:Thread(ns.viewId)
-		if t then env, current = ns.Store.EnvOf(t.id), self:ThreadModel(t) end
-	end
-	local options = env and ns.Store:ModelOptions(env, current)
-	if not options or (self.mode ~= "new" and not current) then
-		dd:Hide()
-		return false
-	end
-	dd.value = current
-	dd:SetOptions(options)
-	-- Wide enough for "Model · Provider" where it fits, so the provider isn't cut off.
-	local textW = dd.Text:GetUnboundedStringWidth() or 0
-	dd:SetWidth(math.min(self.mode == "new" and 200 or 220, math.max(150, math.ceil(textW) + 40)))
-	dd:Show()
-	return true
-end
-
--- The reasoning level picked for the new thread, now or last time in this project,
--- when the model it starts on offers it. Nil means the model's own.
-function M:ChosenNewEffort()
-	if ns.Store:IsOrca() then return nil end
-	local options = ns.Store:EffortOptions(ns.Store.EnvOf(self.newProject), self:NewThreadModel())
-	if ns.Store.HasOption(options, self.newEffort) then return self.newEffort end
-	local saved = self.newProject and ns.db.efforts[self.newProject]
-	if ns.Store.HasOption(options, saved) then return saved end
-end
-
--- The open thread's reasoning level, or the one just picked for it until T3 confirms it.
-function M:ThreadEffort(t)
-	local pending = self.pendingEffort
-	if pending and pending.thread == t.id then
-		if pending.value == t.re or GetTime() - pending.at > 30 then
-			self.pendingEffort = nil
-		else
-			return pending.value
-		end
-	end
-	return t.re
-end
-
--- Fill the reasoning dropdown for the model on screen. Returns whether it's shown.
-function M:SetupEffortDropdown()
-	local dd = self.frame.Pages.threads.Right.Header.Effort
-	local env, model, current
-	if self.mode == "new" then
-		env, model = ns.Store.EnvOf(self.newProject), self:NewThreadModel()
-		current = self:ChosenNewEffort()
-		local p = ns.Store.projectsById[self.newProject or ""]
-		if not current then
-			-- What the bridge would carry over: T3's own pick when it's this model,
-			-- else the level last used with the model.
-			if p and p.dm == model then current = p.de else current = ns.Store:LastEffort(env, model) end
-		end
-	else
-		local t = ns.Store:Thread(ns.viewId)
-		if t then
-			env, model, current = ns.Store.EnvOf(t.id), self:ThreadModel(t), self:ThreadEffort(t)
-			-- Just switched to another model: it brings the level last used with it.
-			if model ~= ns.Store.ModelKey(t.mi, t.m) and not (self.pendingEffort and self.pendingEffort.thread == t.id) then
-				current = ns.Store:LastEffort(env, model)
-			end
-		end
-	end
-	local options, default = ns.Store:EffortOptions(env, model)
-	if not options then
-		dd:Hide()
-		return false
-	end
-	-- A level the model doesn't have (after a model switch, say) shows as its default.
-	dd.value = ns.Store.HasOption(options, current) and current or default
-	dd:SetOptions(options)
-	dd:Show()
-	return true
-end
-
-function M:PickEffort(value)
-	if self.mode == "new" then
-		self.newEffort = value
-		if self.newProject then ns.db.efforts[self.newProject] = value end
-	else
-		local t = ns.Store:Thread(ns.viewId)
-		if not t or value == self:ThreadEffort(t) then return end
-		local instanceId, slug = ns.Store.SplitModelKey(self:ThreadModel(t))
-		if not instanceId then return end
-		self.pendingEffort = { thread = t.id, value = value, at = GetTime(), cmd = ns.Transport:Send("model", t.id, instanceId, slug, value) }
-	end
-	self:Refresh()
-end
-
-function M:PickModel(value)
-	if self.mode == "new" then
-		self.newModel = value
-		if self.newProject then ns.db.models[self.newProject] = value end
-	else
-		local t = ns.Store:Thread(ns.viewId)
-		if not t or value == self:ThreadModel(t) then return end
-		local instanceId, slug = ns.Store.SplitModelKey(value)
-		if not instanceId then return end
-		self.pendingModel = { thread = t.id, value = value, at = GetTime(), cmd = ns.Transport:Send("model", t.id, instanceId, slug) }
-	end
-	self:Refresh()
-end
-
----------------------------------------------------------------------------
--- Agent picker (Orca)
+-- Agent picker
 
 -- The agent the new worktree starts with: picked now, else last time, else the one
--- Orca preselects. Nil when the bridge offers no agents (T3 Code, older bridges).
+-- Orca preselects. Nil when the bridge offers no agents (an older bridge).
 function M:ChosenNewAgent()
-	if not ns.Store:IsOrca() then return nil end
 	local options, default = ns.Store:AgentOptions()
 	if not options then return nil end
 	for _, id in ipairs({ self.newAgent or false, ns.db.lastAgent or false, default or false }) do
@@ -1178,13 +933,7 @@ ns:On("CommandResult", function(r)
 	end
 	if r.ok == false and r.msg then
 		ns.Print(ns.Color("red", r.msg))
-		if UIErrorsFrame then UIErrorsFrame:AddMessage(ns.AppName() .. ": " .. r.msg, 1, 0.2, 0.2) end
-	end
-	if r.ok == false then
-		local refused
-		if M.pendingModel and r.id == M.pendingModel.cmd then M.pendingModel, refused = nil, true end
-		if M.pendingEffort and r.id == M.pendingEffort.cmd then M.pendingEffort, refused = nil, true end
-		if refused and M.frame and M.frame:IsShown() then M:Refresh() end
+		if UIErrorsFrame then UIErrorsFrame:AddMessage("Orca: " .. r.msg, 1, 0.2, 0.2) end
 	end
 	if r.id == M.pendingNew then
 		M.pendingNew = nil

@@ -2,7 +2,6 @@
 
 local _, ns = ...
 
--- Set at load, before any snapshot says which backend runs: named for Orca.
 BINDING_HEADER_ORCAWOW = "Orca"
 BINDING_NAME_ORCAWOW_TOGGLE = "Open or close Orca"
 BINDING_NAME_ORCAWOW_NEW = "Start a new agent"
@@ -45,10 +44,9 @@ end
 
 function OrcaWow_OnAddonCompartmentEnter(_, menuButtonFrame)
 	GameTooltip:SetOwner(menuButtonFrame, "ANCHOR_LEFT")
-	GameTooltip:SetText(ns.AppName(), 1, 0.82, 0)
+	GameTooltip:SetText("Orca", 1, 0.82, 0)
 	local active = ns.Store:Active()
-	local noun = ns.Store:IsOrca() and " active agent" or " active thread"
-	GameTooltip:AddLine(#active > 0 and (#active .. noun .. (#active == 1 and "" or "s")) or "Nothing running", 1, 1, 1)
+	GameTooltip:AddLine(#active > 0 and (#active .. " active agent" .. (#active == 1 and "" or "s")) or "Nothing running", 1, 1, 1)
 	GameTooltip:AddLine("Click to open, right-click for settings", 0.6, 0.6, 0.6)
 	GameTooltip:Show()
 end
@@ -57,7 +55,7 @@ function OrcaWow_OnAddonCompartmentLeave()
 	GameTooltip:Hide()
 end
 
--- Step-by-step check of everything between the game and T3 Code.
+-- Step-by-step check of everything between the game and Orca.
 function ns.SelfTest()
 	local T = ns.Transport
 	local b = ns.Store.data.bridge or {}
@@ -75,10 +73,9 @@ function ns.SelfTest()
 	local age = T.bridgeNow and (time() - T.bridgeNow) or nil
 	line(age ~= nil and age < 300, "bridge: " .. (b.version and ("orca-wow " .. b.version) or "not heard from") .. (age and string.format(", last update %ds ago", age) or ""),
 		"check `orca-wow status` on your desktop")
-	local app = ns.AppName()
-	line(b.t3 == "connected", app .. " on this computer: " .. tostring(b.t3), b.t3err or (ns.Store:IsOrca() and "open Orca on your computer" or nil))
+	line(b.orca == "connected", "Orca on this computer: " .. tostring(b.orca), b.err or "open Orca on your computer")
 	for _, e in ipairs(b.envs or {}) do
-		if not e["local"] then line(e.state == "connected", app .. " on " .. e.label .. ": " .. tostring(e.state), "check that machine is on and reachable") end
+		if not e["local"] then line(e.state == "connected", "Orca on " .. e.label .. ": " .. tostring(e.state), "check that machine is on and reachable") end
 	end
 	line(T:SlotsLeft() > 40, string.format("live updates left: %d of %d", T:SlotsLeft(), T.slotCount), "/reload to free a fresh set")
 	local errs = ns.db.errors or {}
@@ -103,9 +100,8 @@ end
 local function Status()
 	local T = ns.Transport
 	local b = ns.Store.data.bridge or {}
-	local orca = ns.Store:IsOrca()
-	ns.Print(string.format("link %s · %s %s · %d %s · live updates left %d/%d · signals %s · queued %d",
-		T:BridgeState(), orca and "Orca" or "T3", b.t3 or "?", #ns.Store.data.threads, orca and "agents" or "threads", T:SlotsLeft(), T.slotCount, T.signals .. " (" .. tostring(T.channel) .. ", " .. tostring(T.selfTests or 0) .. " tests)", #T.queue))
+	ns.Print(string.format("link %s · Orca %s · %d agents · live updates left %d/%d · signals %s · queued %d",
+		T:BridgeState(), b.orca or "?", #ns.Store.data.threads, T:SlotsLeft(), T.slotCount, T.signals .. " (" .. tostring(T.channel) .. ", " .. tostring(T.selfTests or 0) .. " tests)", #T.queue))
 end
 
 -- "--agent codex --name x --base develop the task" -> { agent, name, base }, "the
@@ -152,11 +148,9 @@ SlashCmdList.ORCAWOW = function(msg)
 			ns.Print("/orca new [--agent <id>] [--name <worktree>] [--base <branch>] [text]")
 			return
 		end
-		local orca = ns.Store:IsOrca()
-		local agents = orca and ns.Store:AgentOptions()
+		local agents = ns.Store:AgentOptions()
 		if (opts.agent or opts.name or opts.base) and not agents then
-			ns.Print(orca and "This bridge doesn't offer a choice of agent, worktree name or base branch yet. Update orca-wow."
-				or "--agent, --name and --base are for Orca. T3 Code picks those itself.")
+			ns.Print("This bridge doesn't offer a choice of agent, worktree name or base branch yet. Update orca-wow.")
 			return
 		end
 		if opts.agent then
@@ -187,13 +181,6 @@ SlashCmdList.ORCAWOW = function(msg)
 	elseif cmd == "settings" or cmd == "options" then
 		ns.Main:Open()
 		ns.Main:ShowPage("settings")
-	elseif cmd == "usage" then
-		if ns.Store:IsOrca() then
-			ns.Print("Orca doesn't report usage limits.")
-			return
-		end
-		ns.Main:Open()
-		ns.Main:ShowPage("usage")
 	elseif cmd == "status" then
 		Status()
 	elseif cmd == "tracker" then
@@ -231,14 +218,13 @@ SlashCmdList.ORCAWOW = function(msg)
 			ns.Print(ns.Color("grey", "(/orca errors clear to reset. They're also saved with the addon's data on /reload.)"))
 		end
 	else
-		local orca = ns.Store:IsOrca()
 		ns.Print("/orca — open the window")
-		ns.Print("/orca new [text] — start a new " .. (orca and "agent" or "thread"))
-		if orca and ns.Store:AgentOptions() then
+		ns.Print("/orca new [text] — start a new agent")
+		if ns.Store:AgentOptions() then
 			ns.Print("/orca new --agent codex --name <worktree> --base <branch> [text] — the same, with those filled in")
 		end
 		ns.Print("/orca report [what went wrong] — diagnostics + screenshot into the message box")
 		ns.Print("/orca shot — attach a screenshot to your next message")
-		ns.Print("/orca selftest | " .. (orca and "" or "usage | ") .. "settings | status | tracker | unlock | lock | hush | errors")
+		ns.Print("/orca selftest | settings | status | tracker | unlock | lock | hush | errors")
 	end
 end

@@ -384,8 +384,6 @@ test('a fleet shows this PC\'s Orca and the Mac\'s, and routes commands to the r
 
   await assert.rejects(fleet.sendMessage('e7~nope', 'x'), /gone/);
   assert.deepEqual(fleet.agentChoices().default, 'claude');
-  assert.deepEqual(fleet.modelGroups(), []);
-  assert.equal(fleet.defaultModelFor(macId), null);
 });
 
 test('an unreachable Mac is offline while this PC stays connected, and reconnects when it is back', async (t) => {
@@ -449,9 +447,9 @@ test('the bridge labels the Mac\'s agents and projects with its name', async (t)
     await mac.stop().catch(() => {});
     for (const d of [dir, secretsDir, stateDir, addonsDir]) fs.rmSync(d, { recursive: true, force: true });
   });
-  b.t3.on('change', (ev) => b.onT3Change(ev));
-  b.t3.start();
-  await waitFor(() => b.t3.state === 'connected' && b.t3.threads.size === 2);
+  b.agents.on('change', (ev) => b.onAgentsChange(ev));
+  b.agents.start();
+  await waitFor(() => b.agents.state === 'connected' && b.agents.threads.size === 2);
   const snap = b.buildSnapshot();
   const macThread = snap.threads.find((x) => x.id.startsWith('e1~'));
   assert.equal(macThread.env, 'MacBook');

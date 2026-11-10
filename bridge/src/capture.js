@@ -448,7 +448,7 @@ export class StripCapture {
   }
 
   // A screenshot of the game window for attaching to a message: JPEG at the
-  // compositor's logical resolution (keeps it well under T3's 10 MB image limit).
+  // compositor's logical resolution, which keeps it to a few hundred KB.
   async screenshot(wowPid) {
     const backend = this.resolveBackend();
     const name = `wow-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.jpg`;

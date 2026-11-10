@@ -1,6 +1,6 @@
 -- Controller support.
 --
--- While the T3 Code window is open in Forever's gamepad UI, the window takes the
+-- While the Orca window is open in Forever's gamepad UI, the window takes the
 -- controller for itself (EnableGamePadButton/EnableGamePadStick, the same way other
 -- Forever addons drive their own windows), so nothing reaches your character:
 --   D-pad / left stick  move the gamepad cursor between controls
@@ -8,7 +8,7 @@
 --   B                   leave the message box, then go back, then close
 --   X                   read the latest reply aloud
 --   Y (hold)            talk: dictation on your desktop, release to finish
---   LB / RB             switch tabs (Threads, Usage, Settings)
+--   LB / RB             switch tabs (Agents, Settings)
 --   LT / RT, right stick  scroll the conversation
 --   Start / Menu        still opens the game menu
 -- Nothing here touches Blizzard's smart-navigation or binding-group code, so the
@@ -20,7 +20,7 @@ local UI = ns.UI
 local G = {}
 ns.Gamepad = G
 
-local PAGES = { "threads", "usage", "settings" }
+local PAGES = { "threads", "settings" }
 local LEFT_STICKS = { Left = true, Movement = true }
 local RIGHT_STICKS = { Right = true, Camera = true, Look = true }
 local PASS_THROUGH = { PADFORWARD = true, PADSYSTEM = true, PADSOCIAL = true }
@@ -79,8 +79,6 @@ function G:Candidates()
 		add(header.Action)
 		add(header.Archive)
 		add(header.Project)
-		add(header.Model)
-		add(header.Effort)
 		local o = page.Right.NewOptions
 		add(o.Agent)
 		add(o.Name)
@@ -242,14 +240,14 @@ local DIRS = {
 }
 
 ---------------------------------------------------------------------------
--- Explicit routes on the Threads page. Pure geometry gives odd jumps between the
--- thread list, the conversation and the message box, so those moves are fixed:
+-- Explicit routes on the Agents page. Pure geometry gives odd jumps between the
+-- agent list, the conversation and the message box, so those moves are fixed:
 --   list  --Right-->  first answer option if the agent is asking, else message box
---   conversation  Up/Down:  Settle -> options (in order, scrolled into view) -> box
+--   conversation  Up/Down:  Mark done -> options (in order, scrolled into view) -> box
 --   box  --Down-->  Send
---   new agent (Orca):  Project -> [Agent, Worktree, Base branch] -> box, Left/Right
---                      along that row
---   conversation  --Left-->  the open thread's row in the list
+--   new agent:  Project -> [Agent, Worktree, Base branch] -> box, Left/Right along
+--               that row
+--   conversation  --Left-->  the open agent's row in the list
 --   bottom buttons  --Up-->  the list (under it) or the message box
 
 -- Select element `index` of a ScrollBox, scrolling it into view first if needed.
@@ -321,7 +319,7 @@ function G:Zone(cur)
 	local right = main.frame.Pages.threads.Right
 	if w == ns.ThreadList.dropdown or cur.box == ns.ThreadList.scrollBox then return "list" end
 	local h, o = right.Header, right.NewOptions
-	if w == main.composer or w == h.Action or w == h.Archive or w == h.Project or w == h.Model or w == h.Effort
+	if w == main.composer or w == h.Action or w == h.Archive or w == h.Project
 		or w == o.Agent or w == o.Name or w == o.Branch or cur.box == ns.Transcript.scrollBox then
 		return "convo"
 	end
@@ -343,16 +341,16 @@ function G:ExplicitMove(cur, dirKey)
 	end
 
 	if zone == "convo" then
-		-- The header row, left to right: [Project] [Model] [Reasoning] on a new
-		-- thread, [Model] [Reasoning] [Archive] [Settle] on an open one.
+		-- The header row, left to right: [Project] on a new agent, [Sleep worktree]
+		-- [Mark done] on an open one.
 		local h = right.Header
 		local row = {}
-		for _, w in ipairs({ h.Project, h.Model, h.Effort, h.Archive, h.Action }) do
+		for _, w in ipairs({ h.Project, h.Archive, h.Action }) do
 			if Usable(w) then table.insert(row, w) end
 		end
 		local at
 		for n, w in ipairs(row) do if w == cur.w then at = n end end
-		-- Orca's new-agent options sit in a row of their own under the header:
+		-- The new-agent options sit in a row of their own under the header:
 		-- [Agent] [Worktree] [Base branch].
 		local o = right.NewOptions
 		local orow = {}
@@ -376,7 +374,7 @@ function G:ExplicitMove(cur, dirKey)
 				return true
 			end
 			if dirKey == "PADDRIGHT" then return false end
-			-- Past the left end: the thread list (on a new thread, let geometry decide).
+			-- Past the left end: the agent list (on a new agent, let geometry decide).
 			if main.mode == "new" then return false end
 			return listShown and self:SelectOpenThreadRow() or false
 		end
@@ -455,7 +453,7 @@ function G:Move(dirKey)
 		local size = box:GetDataProviderSize()
 		local step = d[2] > 0 and -1 or 1
 		local nextIndex = index and index + step
-		-- A dropdown's group headers aren't choices; the thread list's are.
+		-- A dropdown's group headers aren't choices; the agent list's are.
 		local open = UI.ListOpen()
 		local headers = not (open and box == open.Box)
 		while nextIndex and nextIndex >= 1 and nextIndex <= size do
@@ -511,11 +509,9 @@ end
 -- Input
 
 local function SwitchPage(delta)
-	-- Orca reports no usage limits, so it has no Usage tab.
-	local pages = ns.Store:IsOrca() and { "threads", "settings" } or PAGES
 	local current = 1
-	for i, p in ipairs(pages) do if p == ns.Main.page then current = i end end
-	ns.Main:ShowPage(pages[(current - 1 + delta) % #pages + 1])
+	for i, p in ipairs(PAGES) do if p == ns.Main.page then current = i end end
+	ns.Main:ShowPage(PAGES[(current - 1 + delta) % #PAGES + 1])
 	PlaySound(SOUNDKIT.IG_CHARACTER_INFO_TAB)
 	G:SelectDefault()
 end
@@ -696,7 +692,7 @@ function G:HelpText()
 	local chord = ns.Launcher and ns.Launcher.chordText
 	return string.format("%s select  ·  %s back  ·  %s hold to talk  ·  %s read aloud  ·  %s%s tabs%s",
 		UI.Glyph("PAD1"), UI.Glyph("PAD2"), UI.Glyph("PAD4"), UI.Glyph("PAD3"), Bumper("PADLSHOULDER"), Bumper("PADRSHOULDER"),
-		chord and ("\nOpen or close " .. ns.AppName() .. " anywhere: hold " .. ns.Launcher.KeyText("PADLTRIGGER") .. " + " .. ns.Launcher.KeyText("PADRTRIGGER") .. " and press " .. ns.Launcher.KeyText("PADBACK") .. ".") or ("\nOpen " .. ns.AppName() .. " any time from the minimap button or the game menu."))
+		chord and ("\nOpen or close Orca anywhere: hold " .. ns.Launcher.KeyText("PADLTRIGGER") .. " + " .. ns.Launcher.KeyText("PADRTRIGGER") .. " and press " .. ns.Launcher.KeyText("PADBACK") .. ".") or "\nOpen Orca any time from the minimap button or the game menu.")
 end
 
 
@@ -801,7 +797,7 @@ end
 -- In Forever's controller mode the triggers are the action-bar modifiers, Back is the
 -- game's "focus interface" button, and the keybinding screen can't record controller
 -- chords, so a key binding can't do this. Instead we read the controller's state each
--- frame and open T3 Code when Back goes down while both triggers are held.
+-- frame and open Orca when Back goes down while both triggers are held.
 --
 -- We never take controller input outside our own window: an addon frame that
 -- receives gamepad buttons breaks the LT + RT action bars (face buttons and D-pad),
@@ -862,7 +858,7 @@ function L:SetupChord()
 	self.chordText = self.enabled and L.KeyText(self.chord) or nil
 end
 
--- Inside the T3 Code window (which has the controller to itself), the same chord
+-- Inside the Orca window (which has the controller to itself), the same chord
 -- closes it. Gamepad.lua's window handler asks this.
 function L.ChordHeld()
 	local held = ReadButtons()
@@ -875,7 +871,7 @@ function L:HookGameMenu()
 	hooksecurefunc(GameMenuFrame, "InitButtons", function(menu)
 		if ns.db.settings.gameMenu == false then return end
 		local ok, err = pcall(function()
-			local button = menu:AddButton(ns.AppName(), function()
+			local button = menu:AddButton("Orca", function()
 				PlaySound(SOUNDKIT.IG_MAINMENU_OPTION)
 				HideUIPanel(menu)
 				L:Open()
@@ -899,7 +895,7 @@ ns:On("Login", function()
 	L:SetupChord()
 	if L.chordText and ns.Gamepad:IsActive() and not ns.db.chordAnnounced then
 		ns.db.chordAnnounced = L.chord
-		ns.Print("Open " .. ns.AppName() .. " from your controller: hold " .. L.KeyText("PADLTRIGGER") .. " + " .. L.KeyText("PADRTRIGGER") .. " and press " .. L.KeyText("PADBACK") .. ". It's also in the game menu.")
+		ns.Print("Open Orca from your controller: hold " .. L.KeyText("PADLTRIGGER") .. " + " .. L.KeyText("PADRTRIGGER") .. " and press " .. L.KeyText("PADBACK") .. ". It's also in the game menu.")
 	end
 end)
 

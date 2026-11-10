@@ -1,6 +1,6 @@
--- Minimap button: click to open or close T3 Code, right-click for settings, drag it
+-- Minimap button: click to open or close Orca, right-click for settings, drag it
 -- around the minimap's edge. Built from the same border and highlight textures as
--- Blizzard's own minimap buttons. A badge shows when a thread needs you.
+-- Blizzard's own minimap buttons. A badge shows when an agent needs you.
 
 local _, ns = ...
 
@@ -98,18 +98,16 @@ function B:Create()
 end
 
 function B:Tooltip(tip)
-	local orca = ns.Store:IsOrca()
-	tip:SetText(ns.AppName(), 1, 0.82, 0)
+	tip:SetText("Orca", 1, 0.82, 0)
 	local working, waiting = 0, 0
 	for _, t in ipairs(ns.Store:Active()) do
 		if t.s == "working" then working = working + 1 else waiting = waiting + 1 end
 	end
-	local noun = orca and "agent" or "thread"
-	if waiting > 0 then tip:AddLine(waiting .. (waiting == 1 and (" " .. noun .. " needs you") or (" " .. noun .. "s need you")), 1, 0.6, 0.2) end
+	if waiting > 0 then tip:AddLine(waiting .. (waiting == 1 and " agent needs you" or " agents need you"), 1, 0.6, 0.2) end
 	if working > 0 then tip:AddLine(working .. " working", 0.4, 0.7, 1) end
 	if working + waiting == 0 then tip:AddLine("Nothing running", 1, 1, 1) end
 	local state = ns.Transport:BridgeState()
-	if state == "t3offline" and orca then
+	if state == "offline" then
 		tip:AddLine("Orca: offline. Open Orca on your computer.", 1, 0.25, 0.25)
 	elseif state ~= "connected" then
 		tip:AddLine("Bridge: " .. state, 0.6, 0.6, 0.6)

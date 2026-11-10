@@ -1,4 +1,4 @@
--- Notices when a thread finishes or needs you: a small gold-bordered toast at the
+-- Notices when an agent finishes or needs you: a small gold-bordered toast at the
 -- top of the screen, a sound, a chat line, and optionally the reply read aloud.
 
 local _, ns = ...
@@ -63,7 +63,7 @@ end
 
 N.frames = {}
 
--- The newest notice still on screen, so a shortcut press can open its thread.
+-- The newest notice still on screen, so a shortcut press can open its agent.
 function N:VisibleThread()
 	local newest
 	for _, f in ipairs(self.frames) do

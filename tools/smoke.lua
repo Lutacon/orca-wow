@@ -32,7 +32,7 @@ check(#ns.Store.data.threads > 0, "threads loaded: " .. #ns.Store.data.threads)
 check(ns.Transport.stripShown, "hello strip shown")
 check(ns.Transport:Encrypted(), "link keys loaded from the bootstrap slot")
 check(OrcaWow_Inbox == nil, "slot global cleared after loading")
-check(ns.Store:Backend() == "t3" and not ns.Store:IsOrca(), "a bridge that names no backend is taken as T3 Code: " .. ns.Store:Backend())
+check(ns.Transport:BridgeState() == "connected", "bridge.orca = connected reads as connected: " .. ns.Transport:BridgeState())
 do
 	local drawn = WOWSTUB.StripCells()
 	-- Header byte 3 (version) spans cells 6..8: bits 16..23 of the frame.
@@ -44,6 +44,14 @@ do
 end
 local payload = ns.Transport:Payload()
 check(payload:sub(1, 2) == "H\031", "payload starts with hello record")
+do
+	-- H proto session ui slot sig gen flags view version slots: "H" and 10 fields,
+	-- with no model-list hash after the slot count.
+	local hello = payload:match("^([^\030]*)")
+	local fields = {}
+	for f in (hello .. "\031"):gmatch("([^\031]*)\031") do fields[#fields + 1] = f end
+	check(#fields == 11 and fields[11] == tostring(ns.Transport.slotCount), "hello ends with the slot count, no models field: " .. #fields .. " fields")
+end
 
 -- Strip encodes within capacity and the cells are valid.
 local cells = ns.Codec.Encode(ns.Transport.stripSeq, payload)
@@ -90,107 +98,26 @@ ns.db.settings.steerFollowUps = true
 check(ns.Transcript.echo[ns.viewId] ~= nil, "local echo shown")
 
 -- Pages
-ns.Main:ShowPage("usage")
 ns.Main:ShowPage("settings")
 ns.Main:ShowPage("threads")
 check(true, "pages switch")
+check(#ns.Main.frame.Tabs == 2 and ns.Main.frame.Tabs[1].tooltipText == "Agents", "two side tabs: Agents and Settings")
+ns.Main:ShowPage("usage")
+check(ns.Main.page == "threads", "there is no Usage page")
 
--- New thread flow
+-- New agent flow
 ns.Main:StartNewThread()
-check(ns.Main.mode == "new" and ns.Main.newProject ~= nil, "new thread mode with project " .. tostring(ns.Main.newProject))
+check(ns.Main.mode == "new" and ns.Main.newProject ~= nil, "new agent mode with project " .. tostring(ns.Main.newProject))
 local hdr = ns.Main.frame.Pages.threads.Right.Header
-check(ns.Transport:Payload():find(ns.Store.modelsHash, 1, true) ~= nil and ns.Store.modelsHash ~= "", "hello reports the model list it has: " .. ns.Store.modelsHash)
-local function Choices(dd)
-	local list = {}
-	for _, o in ipairs(dd.options) do if not o.header then table.insert(list, o) end end
-	return list
-end
-local groups = {}
-for _, o in ipairs(hdr.Model.options) do if o.header then table.insert(groups, o.label) end end
-check(hdr.Model:IsShown() and #Choices(hdr.Model) >= 1, "model picker shown for a new thread: " .. #Choices(hdr.Model) .. " models")
-check(hdr.Model.options[1].header and #groups >= 2, "models grouped under headers: " .. table.concat(groups, ", "))
-check(hdr.Model.Text:GetText():find(" · ", 1, true) ~= nil, "the button names the provider: " .. hdr.Model.Text:GetText())
-do
-	-- A search for a provider keeps its header and its models; headers aren't choices.
-	local provider = groups[#groups]
-	ns.UI.OpenList(hdr.Model)
-	local l = ns.UI.ListOpen()
-	l.Search:SetText(provider:lower())
-	ns.UI.RefreshList()
-	local at, others
-	for n, o in ipairs(l.filtered) do
-		if o.header and o.label == provider then at = n end
-		-- Another provider's model may match on its own name ("GPT-5 Codex" under OpenCode, say).
-		if not o.header and o.group ~= provider and o.group ~= "Recent" and not o.label:lower():find(provider:lower(), 1, true) then others = true end
-	end
-	check(at and l.filtered[at + 1] and not l.filtered[at + 1].header and not others, "searching a provider's name lists its models under its header")
-	l:Hide()
-end
-do
-	local seq = ns.Transport.stripSeq
-	ns.Transport:Apply({ gen = data.gen + 1, threads = data.threads, projects = data.projects, bridge = data.bridge, usage = data.usage, models = { h = "00000000", g = {} } })
-	check(ns.Transport.stripSeq ~= seq and ns.Transport:Payload():find("00000000", 1, true) ~= nil, "a new model list is announced straight away")
-	check(ns.Store:ModelOptions("", nil) == nil, "an empty list clears the models")
-	check(not hdr.Model:IsShown() and not hdr.Effort:IsShown(), "no models: neither picker is left on screen")
-	data.gen = data.gen + 1
-	ns.Transport:Apply({ gen = data.gen + 1, threads = data.threads, projects = data.projects, bridge = data.bridge, usage = data.usage, models = data.models })
-	data.gen = data.gen + 1
-	check(hdr.Model:IsShown(), "the list comes back")
-end
-check(ns.Main:ChosenNewModel() == nil and ns.Main:NewThreadModel() ~= nil, "no pick yet: the picker shows T3's default but sends none")
--- Pick the last model that has reasoning levels (any model when none has).
-local pick
-for _, o in ipairs(Choices(hdr.Model)) do
-	if not pick or ns.Store:EffortOptions("", o.value) then pick = o end
-end
-ns.Main:PickModel(pick.value)
-check(ns.db.models[ns.Main.newProject] == pick.value and ns.Main:NewThreadModel() == pick.value, "picked model remembered for the project: " .. pick.label)
-local level
-if hdr.Effort:IsShown() then
-	local levels, default = ns.Store:EffortOptions("", pick.value)
-	for _, o in ipairs(levels) do if o.value ~= default then level = o.value end end
-	local proj = ns.Store.projectsById[ns.Main.newProject]
-	local inherited = (proj.dm == pick.value and proj.de) or ns.Store:LastEffort("", pick.value) or default
-	check(ns.Main:ChosenNewEffort() == nil and hdr.Effort.value == inherited, "no level picked: the picker shows the level the thread would get: " .. inherited)
-	ns.Main:PickEffort(level)
-	check(ns.db.efforts[ns.Main.newProject] == level and hdr.Effort.value == level, "picked level remembered for the project: " .. level)
-else
-	check(false, "the reasoning picker shows for " .. pick.label)
-end
+check(hdr.Model == nil and hdr.Effort == nil, "no model or reasoning picker")
 ns.Main.composer._text = "Build a thing"
 ns.Main:Send()
-check(ns.Transport:Payload():find("\031new\031", 1, true) ~= nil, "new-thread command in payload")
-local pickI, pickS = ns.Store.SplitModelKey(pick.value)
-check(ns.Transport:Payload():find("Build a thing\031" .. pickI .. "\031" .. pickS .. (level and ("\031" .. level) or ""), 1, true) ~= nil, "picked model and level ride along with the new thread")
-ns.Transport:Apply({ gen = data.gen + 2, results = { { id = ns.Main.pendingNew, ok = true, open = firstThread.id } }, threads = data.threads, projects = data.projects, bridge = data.bridge, usage = data.usage, ack = { ui = ns.ui, seq = ns.Transport.stripSeq } })
-check(ns.Main.mode == "thread" and ns.viewId == firstThread.id, "result opened the new thread")
+check(ns.Transport:Payload():find("\031new\031", 1, true) ~= nil, "new-agent command in payload")
+check(ns.Transport:Payload():find("\031new\031" .. ns.Store.data.projects[1].id .. "\031Build a thing\031claude", 1, true) ~= nil, "new carries the project, the text and the bridge's default agent")
+ns.Transport:Apply({ gen = data.gen + 2, results = { { id = ns.Main.pendingNew, ok = true, open = firstThread.id } }, threads = data.threads, projects = data.projects, bridge = data.bridge, agents = data.agents, ack = { ui = ns.ui, seq = ns.Transport.stripSeq } })
+check(ns.Main.mode == "thread" and ns.viewId == firstThread.id, "result opened the new agent")
 check(#ns.Transport.queue == 0, "all commands acknowledged")
-check(hdr.Model:IsShown(), "model picker shown for an open thread")
-local cur = ns.Main:ThreadModel(ns.Store:Thread(ns.viewId))
-local other
-for _, o in ipairs(Choices(hdr.Model)) do if o.value ~= cur then other = o break end end
-if other then
-	ns.Main:PickModel(other.value)
-	local oi, os_ = ns.Store.SplitModelKey(other.value)
-	check(ns.Transport:Payload():find("\031model\031" .. ns.viewId .. "\031" .. oi .. "\031" .. os_, 1, true) ~= nil, "switching a thread's model sends model")
-	check(hdr.Model.value == other.value, "the picker shows the new model straight away")
-	ns.Transport:Apply({ gen = data.gen + 3, results = { { id = ns.Main.pendingModel.cmd, ok = false, msg = "Codex is switched off in T3 Code. Pick another model." } }, threads = data.threads, projects = data.projects, bridge = data.bridge, usage = data.usage, ack = { ui = ns.ui, seq = ns.Transport.stripSeq } })
-	check(ns.Main.pendingModel == nil and hdr.Model.value == cur, "a refused switch puts the picker back")
-end
-do
-	local t = ns.Store:Thread(ns.viewId)
-	local levels = ns.Store:EffortOptions(ns.Store.EnvOf(t.id), ns.Store.ModelKey(t.mi, t.m))
-	check(hdr.Effort:IsShown() == (levels ~= nil), "the reasoning picker shows when the thread's model has levels")
-	if levels then
-		local next
-		for _, o in ipairs(levels) do if o.value ~= hdr.Effort.value then next = o.value break end end
-		ns.Main:PickEffort(next)
-		check(ns.Transport:Payload():find("\031model\031" .. ns.viewId .. "\031" .. t.mi .. "\031" .. t.m .. "\031" .. next, 1, true) ~= nil, "changing a thread's level sends model with it")
-		check(hdr.Effort.value == next, "the picker shows the new level straight away")
-		ns.Transport:Apply({ gen = data.gen + 4, results = { { id = ns.Main.pendingEffort.cmd, ok = false, msg = "That level is gone." } }, threads = data.threads, projects = data.projects, bridge = data.bridge, usage = data.usage, ack = { ui = ns.ui, seq = ns.Transport.stripSeq } })
-		check(ns.Main.pendingEffort == nil and hdr.Effort.value ~= next, "a refused level puts the picker back")
-	end
-end
+check(hdr.Action:GetText() == "Mark done", "an open agent offers Mark done: " .. hdr.Action:GetText())
 
 -- Question / approval rendering
 data.gen = data.gen + 10
@@ -251,7 +178,7 @@ ns.Main.dictating = false
 ns.Main:ToggleDictation()
 check(ns.Main.dictating, "dictation starts when a backend is reported")
 data.gen = data.gen + 1
-ns.Transport:Apply({ gen = data.gen, results = { { id = ns.Main.dictCmd, ok = false, msg = "no microphone" } }, threads = data.threads, projects = data.projects, bridge = data.bridge, usage = data.usage, ack = { ui = ns.ui, seq = ns.Transport.stripSeq } })
+ns.Transport:Apply({ gen = data.gen, results = { { id = ns.Main.dictCmd, ok = false, msg = "no microphone" } }, threads = data.threads, projects = data.projects, bridge = data.bridge, agents = data.agents, ack = { ui = ns.ui, seq = ns.Transport.stripSeq } })
 check(not ns.Main.dictating, "a refused dictate command puts the mic back")
 
 -- Plan, approval details, run summary, queued note
@@ -278,16 +205,16 @@ check(found.sum and found.queued, "run summary and queued follow-ups shown")
 data.gen = data.gen + 1
 for _, th in ipairs(data.threads) do if th.id == ns.viewId then th.s = "input" end end
 data.view.plan, data.view.queued = nil, nil
-data.view.pending = { id = "ap1", kind = "approval", what = "Change files", detail = "", files = { { f = "a.lua", a = 12, d = 3 } }, always = true }
+data.view.pending = { id = "ap1", kind = "approval", what = "Change files", detail = "", files = { { f = "a.lua", a = 12, d = 3 } } }
 ns.Transport:Apply(data)
 found = {}
 for _, r in ipairs(ns.Transcript.scrollBox._rows) do
 	if r.ed.text and r.ed.text:find("a.lua", 1, true) and r.ed.text:find("+12", 1, true) then found.files = true end
-	if r.ed.label == "Always allow this" then found.always = r end
+	if r.ed.label == "Yes" then found.yes = r end
 end
 check(found.files, "approval lists the files with +/- counts")
-found.always.frame:Click()
-check(ns.Transport:Payload():find("approve\031" .. ns.viewId .. "\031ap1\031acceptAlways", 1, true) ~= nil, "Always allow sends acceptAlways")
+found.yes.frame:Click()
+check(ns.Transport:Payload():find("approve\031" .. ns.viewId .. "\031ap1\031accept", 1, true) ~= nil, "Yes sends accept")
 data.gen = data.gen + 1
 data.view.pending = nil
 for _, th in ipairs(data.threads) do if th.id == ns.viewId then th.s = "open" end end
@@ -374,39 +301,7 @@ check(f._scripts.OnGamePadStick(f, "Left", 0, -1) == false, "left stick consumed
 check(down(f, "PADFORWARD") == false and f._shown == false and not ns.Gamepad.capturing, "Start closes the window and gives the controller back")
 ns.Main:Open()
 check(ns.Gamepad.capturing, "reopened window takes the controller again")
--- The model picker sits on the header row: D-pad to it, A opens its list, B closes it.
-do
-	local prevView = ns.viewId
-	ns.Main:StartNewThread()
-	ns.Gamepad:Highlight(hdr.Project)
-	down(f, "PADDRIGHT")
-	check(ns.Gamepad.selected == hdr.Model, "Right from the project goes to the model picker")
-	down(f, "PAD1")
-	local l = ns.UI.ListOpen()
-	check(l ~= nil and l.owner == hdr.Model, "A opens the model list")
-	local rows, onHeader = 0, false
-	for _, c in ipairs(ns.Gamepad:Candidates()) do
-		rows = rows + 1
-		if c.ed and c.ed.header then onHeader = true end
-	end
-	check(rows > 0 and not onHeader, "the D-pad skips group headers in the list: " .. rows .. " rows")
-	down(f, "PAD2")
-	check(ns.UI.ListOpen() == nil and f._shown, "B closes the model list, not the window")
-	if hdr.Effort:IsShown() then
-		down(f, "PADDRIGHT")
-		check(ns.Gamepad.selected == hdr.Effort, "Right from the model goes to the reasoning picker")
-		down(f, "PAD1")
-		local open = ns.UI.ListOpen()
-		check(open ~= nil and open.owner == hdr.Effort, "A opens the reasoning list")
-		down(f, "PAD2")
-		down(f, "PADDLEFT")
-		check(ns.Gamepad.selected == hdr.Model, "Left from the reasoning picker goes back to the model")
-	end
-	down(f, "PADDLEFT")
-	check(ns.Gamepad.selected == hdr.Project, "Left goes back to the project")
-	ns.Main:SelectThread(prevView)
-end
-check(down(f, "PADRSHOULDER") == false and ns.Main.page == "usage", "RB switched to usage")
+check(down(f, "PADRSHOULDER") == false and ns.Main.page == "settings", "RB switched to settings")
 down(f, "PADLSHOULDER")
 check(ns.Main.page == "threads", "LB switched back")
 down(f, "PAD4")
@@ -493,8 +388,8 @@ check(ns.Launcher.chord == "PADLTRIGGER-PADRTRIGGER-PADBACK", "controller shortc
 check(next(Stub.overrides) == nil, "no key bindings overridden (Forever's controller mode ignores them)")
 GameMenuFrame:InitButtons()
 local entry
-for _, b in ipairs(GameMenuFrame.buttons) do if b.text == "T3 Code" then entry = b end end
-check(entry and entry.layoutIndex == 4.5, "game menu entry sits above Log Out")
+for _, b in ipairs(GameMenuFrame.buttons) do if b.text == "Orca" then entry = b end end
+check(entry and entry.layoutIndex == 4.5, "game menu entry reads Orca and sits above Log Out")
 _G.HideUIPanel = function() end
 entry.cb()
 check(f._shown, "game menu entry opens the window")
@@ -586,7 +481,7 @@ do
 	check(ns.windowOpen == wasOpen, "holding the triggers alone does nothing (LT + RT action bars stay the game's)")
 	WOWSTUB.padHeld.PADBACK = true
 	frame()
-	check(ns.windowOpen ~= wasOpen, "triggers + Back toggles T3 Code")
+	check(ns.windowOpen ~= wasOpen, "triggers + Back toggles Orca")
 	frame()
 	frame()
 	check(ns.windowOpen ~= wasOpen, "holding Back doesn't toggle it again")
@@ -647,35 +542,26 @@ do
 	ns.MinimapButton:Refresh()
 end
 
--- Orca backend: no model or reasoning pickers, no usage tab, Orca's words, and the
--- same commands underneath.
+-- Agents: Orca's words and the same commands underneath, the new-agent form,
+-- approvals and the link status.
 do
 	local main, f = ns.Main, ns.Main.frame
 	local hdr = f.Pages.threads.Right.Header
 	local function Snapshot(bridge, extra)
-		local s = { gen = ns.db.gen + 1, now = os.time(), threads = data.threads, projects = data.projects, usage = {}, bridge = bridge, ack = { ui = ns.ui, seq = ns.Transport.stripSeq } }
+		local s = { gen = ns.db.gen + 1, now = os.time(), threads = data.threads, projects = data.projects, bridge = bridge, ack = { ui = ns.ui, seq = ns.Transport.stripSeq } }
 		for k, v in pairs(extra or {}) do s[k] = v end
 		ns.Transport:Apply(s)
 	end
-	local orcaBridge = { version = "0.4.0", backend = "orca", t3 = "connected", dictation = "test backend" }
-	-- No `models` section: Orca's agents pick their own. The T3 list from earlier is
-	-- still held, so this also checks that a stale list doesn't bring the pickers back.
+	local orcaBridge = { version = "0.4.0", orca = "connected", dictation = "test backend" }
+	-- An older bridge that offers no agents to pick from.
 	Snapshot(orcaBridge, { view = { id = firstThread.id, msgs = data.view.msgs } })
-	check(ns.Store:IsOrca() and ns.Store:AppName() == "Orca", "bridge.backend = 'orca' switches to Orca")
-	ns.Main.page = "usage"
 	main:Open()
 	main:SelectThread(firstThread.id)
 	main:Refresh()
-	check(main.page == "threads", "an open Usage page gives way to the agents")
-	check(not f.Tabs[2]:IsShown(), "no Usage tab")
-	check(f.Tabs[1].tooltipText == "Agents", "the first tab is Agents")
-	main:ShowPage("usage")
-	check(main.page == "threads", "the Usage page can't be opened")
-	check(not hdr.Model:IsShown() and not hdr.Effort:IsShown(), "no model or reasoning picker on an open agent")
-	check(hdr.Action:GetText() == "Mark done", "Settle reads Mark done: " .. hdr.Action:GetText())
+	check(hdr.Action:GetText() == "Mark done", "an open agent offers Mark done: " .. hdr.Action:GetText())
 	hdr.Action:Click()
-	check(ns.Transport.queue[#ns.Transport.queue].verb == "settle", "Mark done still sends settle")
-	check(f.Bar.New:GetText() == "New agent", "New Thread reads New agent")
+	check(ns.Transport.queue[#ns.Transport.queue].verb == "settle", "Mark done sends settle")
+	check(f.Bar.New:GetText() == "New agent", "the new button reads New agent")
 	-- A settled agent: Reopen, and Archive becomes Sleep worktree.
 	local settled
 	for _, th in ipairs(data.threads) do if th.s == "settled" then settled = th end end
@@ -686,11 +572,10 @@ do
 	local listed = {}
 	for _, r in ipairs(ns.ThreadList.scrollBox._rows) do if r.ed.header then listed[r.ed.key] = r.ed.label end end
 	check(listed.settled == "Done", "the Settled group reads Done")
-	-- New agent on a bridge that offers no agents: no pickers, and no model rides along.
+	-- New agent on a bridge that offers no agents: no agent row, and Orca picks.
 	local opts = f.Pages.threads.Right.NewOptions
 	main:StartNewThread()
-	check(f.Subtitle:GetText() == "New agent in " .. ns.Store:ProjectName(main.newProject) and not hdr.Model:IsShown() and not hdr.Effort:IsShown() and hdr.Project:IsShown() and not opts:IsShown(), "a new agent asks only for the project: " .. f.Subtitle:GetText())
-	check(main:ChosenNewModel() == nil and main:ChosenNewEffort() == nil, "a model remembered from T3 Code isn't sent to Orca")
+	check(f.Subtitle:GetText() == "New agent in " .. ns.Store:ProjectName(main.newProject) and hdr.Project:IsShown() and not opts:IsShown(), "a new agent asks only for the project: " .. f.Subtitle:GetText())
 	main.composer._text = "Start an Orca agent"
 	main:Send()
 	local new = ns.Transport.queue[#ns.Transport.queue]
@@ -708,7 +593,6 @@ do
 	check(opts:IsShown() and opts.Agent:IsVisible() and opts.Name:IsVisible() and opts.Branch:IsVisible(), "the new-agent form shows the agent picker and the two boxes")
 	check(opts.Agent.value == "claude" and opts.Agent.Text:GetText() == "Claude" and #opts.Agent.options == 3, "the agent picker preselects the bridge's default: " .. opts.Agent.Text:GetText())
 	check(opts.Name.Placeholder:IsShown() and opts.Name.Placeholder:GetText() == "auto" and opts.Branch.Placeholder:GetText() == "default branch", "empty boxes say what they default to")
-	check(not hdr.Model:IsShown() and not hdr.Effort:IsShown(), "still no model or reasoning picker")
 	check(ns.Transcript.inset._points[1][2] == opts, "the conversation hangs under the options row, not over it")
 	check(f.Subtitle:GetText() == "New Claude agent in " .. projectName, "the subtitle names the agent: " .. f.Subtitle:GetText())
 	ns.UI.OpenList(opts.Agent)
@@ -802,9 +686,7 @@ do
 	check(got == "Yes|No", "a menu without the agent's own don't-ask-again row reads Yes / No: " .. got)
 	byLabel["Yes"].frame:Click()
 	check(ns.Transport:Payload():find("approve\031" .. firstThread.id .. "\031ap9\031accept", 1, true) ~= nil, "Yes sends accept")
-	Snapshot(orcaBridge, { view = { id = firstThread.id, msgs = data.view.msgs, pending = { id = "ap10", kind = "approval", what = "Run a command", detail = "rm -rf build", always = true } } })
-	got = Options()
-	check(got == "Yes|No", "nor Always allow this on an Orca menu without that row: " .. got)
+
 	-- A yes row that says more than "Yes" (`yl`) is the Yes button's label, word for word.
 	local ylLabel, autoLabel = "Yes, and manually approve edits", "Yes, and auto-accept edits"
 	Snapshot(orcaBridge, { view = { id = firstThread.id, msgs = data.view.msgs, pending = { id = "ap10b", kind = "approval", what = "Change files", detail = "", yl = ylLabel, al = autoLabel } } })
@@ -822,7 +704,7 @@ do
 	check(got == "No" and pcNote ~= nil, "a request without a yes row offers only No and says why: " .. got)
 	-- The agent's own row, word for word (`al`), picks acceptForSession.
 	local alLabel = "Yes, and don't ask again for npm test commands in C:\\src\\app"
-	local alView = { id = firstThread.id, msgs = data.view.msgs, pending = { id = "ap11", kind = "approval", what = "Run a command", detail = "npm test", al = alLabel, always = true } }
+	local alView = { id = firstThread.id, msgs = data.view.msgs, pending = { id = "ap11", kind = "approval", what = "Run a command", detail = "npm test", al = alLabel } }
 	Snapshot(orcaBridge, { view = alView })
 	got, byLabel = Options()
 	check(got == "Yes|" .. alLabel .. "|No", "the agent's own don't-ask-again label replaces the generic buttons: " .. got)
@@ -853,14 +735,14 @@ do
 	byLabel["No"].frame:Click()
 	sentCmd = ns.Transport.queue[#ns.Transport.queue]
 	check(sentCmd.verb == "approve" and sentCmd.args[2] == "ap12" and sentCmd.args[3] == "decline", "No declines it")
-	-- Controller: the bumpers skip the missing Usage tab.
+	-- Controller: the bumpers go between the two tabs.
 	local down = f._scripts.OnGamePadButtonDown
 	down(f, "PADRSHOULDER")
-	check(main.page == "settings", "RB goes from the agents straight to Settings")
+	check(main.page == "settings", "RB goes from the agents to Settings")
 	down(f, "PADRSHOULDER")
 	check(main.page == "threads", "and wraps back to the agents")
-	-- Link status, tracker, minimap and game menu.
-	Snapshot({ version = "0.4.0", backend = "orca", t3 = "offline" })
+	-- Link status, tracker, minimap and settings when Orca is offline.
+	Snapshot({ version = "0.4.0", orca = "offline", err = "Orca's pipe is closed" })
 	local status = f.Status:GetText()
 	check(status:find("Orca: offline", 1, true) and status:find("open Orca on your computer", 1, true), "offline status names Orca and what to do: " .. status)
 	ns.Tracker:Refresh()
@@ -869,29 +751,11 @@ do
 	local tip = { SetText = function(_, text) table.insert(tipLines, text) end, AddLine = function(_, text) table.insert(tipLines, text) end }
 	ns.MinimapButton:Tooltip(tip)
 	check(tipLines[1] == "Orca" and table.concat(tipLines, "\n"):find("Open Orca on your computer", 1, true), "the minimap tooltip names Orca and says it's offline")
-	GameMenuFrame:InitButtons()
-	local entry
-	for _, b in ipairs(GameMenuFrame.buttons) do if b.text == "Orca" then entry = b end end
-	check(entry ~= nil, "the game menu entry reads Orca")
-	Stub.printed = {}
-	SlashCmdList.ORCAWOW("usage")
-	check(main.page == "threads" and Stub.printed[1] and Stub.printed[1]:find("doesn't report usage", 1, true), "/orca usage explains Orca has none")
-	-- Back on an older bridge (no backend): T3 Code's tab and pickers return.
-	Snapshot(data.bridge, { view = { id = firstThread.id, msgs = data.view.msgs } })
-	main:SelectThread(firstThread.id)
-	main:Refresh()
-	check(not ns.Store:IsOrca() and f.Tabs[2]:IsShown() and hdr.Model:IsShown(), "without a backend the Usage tab and model picker come back")
-	check(hdr.Action:GetText() == "Settle" and f.Bar.New:GetText() == "New Thread", "and T3 Code's words")
-	-- T3 Code's new thread: model and reasoning pickers, no agent row, the old command.
-	main:StartNewThread()
-	check(hdr.Model:IsShown() and not opts:IsShown() and main:ChosenNewAgent() == nil and f.Subtitle:GetText() == "New Thread", "a T3 Code thread shows the model picker and no agent row")
-	main.composer._text = "A T3 thread"
-	main:Send()
-	new = ns.Transport.queue[#ns.Transport.queue]
-	local mi, ms = ns.Store.SplitModelKey(main:ChosenNewModel())
-	check(new.verb == "new" and new.args[2] == "A T3 thread" and new.args[3] == mi and new.args[4] == ms and ms ~= nil, "and sends new with the instance and model: " .. Args(new))
-	main:Back()
-	check(#(ns.db.errors or {}) == 0, "no errors recorded with Orca")
+	ns.Settings:Refresh()
+	check(ns.Settings.info:GetText():find("Orca's pipe is closed", 1, true) ~= nil, "settings show the bridge's reason (bridge.err)")
+	Snapshot({ version = "0.4.0", orca = "connecting" })
+	check(f.Status:GetText():find("Orca: connecting", 1, true) ~= nil, "connecting reads as connecting: " .. f.Status:GetText())
+	check(#(ns.db.errors or {}) == 0, "no errors recorded")
 end
 
 -- Exhaustion

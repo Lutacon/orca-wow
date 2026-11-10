@@ -9,12 +9,11 @@
  │  UI/*           window,      │   files    │               Signals/NNNNN.wav              │
  │                 tracker, pad │            │ orca.js       named pipe ────────────────────┼─▶ Orca on this PC
  └──────────────────────────────┘            │ orca-remote   E2EE WebSocket ────────────────┼─▶ Orca on other computers
-                                             │ t3.js         WebSocket RPC ─────────────────┼─▶ T3 Code ("backend": "t3")
                                              │ voice.js      speech, dictation              │
                                              └──────────────────────────────────────────────┘
 ```
 
-The bridge has two backends behind one interface. **Orca** (the default, and what this fork tests, on Windows) shows the coding agents of one or more Orca apps: this PC's over its named pipe, others over Orca's end-to-end encrypted WebSocket. **T3 Code** (`"backend": "t3"` in `config.json`, from upstream) shows T3 Code threads. Both hand the bridge the same thread shape, so everything between the bridge and the game is shared.
+The bridge shows the coding agents of one or more Orca apps: this PC's over its named pipe, others over Orca's end-to-end encrypted WebSocket.
 
 ## Constraints this is built around
 
@@ -30,7 +29,7 @@ Measured on live Forever 1.60.1 clients (TOC 16001) by [wow-forever-codex](https
 `Codec.lua` and `codec.js` share one frame format:
 
 ```
-'T' '3' version  seq(2)  len(2)  payload…  fletcher16(2)
+'O' 'W' version  seq(2)  len(2)  payload…  fletcher16(2)
 ```
 
 **Encryption.** The strip is on screen, so streams and recordings capture it. Version 2 frames (all of them, once the addon has its keys) carry
@@ -54,12 +53,11 @@ The frame is packed into 3-bit cells. Each cell is a 3×3-pixel square with R, G
 The payload is records separated by `RS` (0x1E), with fields separated by `US` (0x1F):
 
 ```
-H  1  session  ui  nextSlot  sigNext  gen  flags  viewThreadId  addonVersion  slotCount  modelsHash
+H  1  session  ui  nextSlot  sigNext  gen  flags  viewThreadId  addonVersion  slotCount
 C  id  verb  args…                      (one per queued command)
 ```
 
 - `session` is persistent (SavedVariables). `ui` is new every load, so the bridge can tell a `/reload` happened.
-- `modelsHash` is the hash of the model list the addon holds (empty until it has one). The bridge sends the list, several KB, only while this differs from its own, so it costs one publish after a `/reload` or a change in T3 Code instead of every publish. Orca has no model list: its agents pick their own.
 - `flags`:
   - `o`: window open
   - `t`: tracker on
@@ -67,14 +65,13 @@ C  id  verb  args…                      (one per queued command)
   - `r`: read finished replies with the desktop voice
   - `s`: sound signals unavailable
 - Verbs:
-  - `send`, `new`, `stop`. With Orca, `new` takes `agent [name [baseBranch]]` after its text.
-  - `model` (`threadId instanceId model [effort]`). `new` takes the same `instanceId model [effort]` after its text; without a model T3 Code's own default applies, and an empty `instanceId model` with an `effort` sets only the reasoning level on that default. `effort` is a level id from the model's list (`low`, `high`, …); without it the thread keeps the options last used with that model. T3 Code only.
+  - `send`, `new`, `stop`. `new` takes `agent [name [baseBranch]]` after its text; empty fields mean Orca's defaults.
   - `settle`, `unsettle`, `archive`, `read`
   - `approve`, `answer`
   - `speak`, `say`, `hush`, `dictate`
   - `ping`
 
-Commands for one thread run one after another, so an answer's keystrokes can't interleave with a message for the same agent; other threads don't wait. Stop doesn't wait in that line either: it's one Escape the player expects at once, while a message can take Orca up to 30 s to type. With Orca it still waits for an answer's keys or an approval's read-and-press on that pane to finish (`withKeyLock` in `orca.js`), since an Escape in the middle would close the selector and the rest would be typed into the prompt box.
+Commands for one thread run one after another, so an answer's keystrokes can't interleave with a message for the same agent; other threads don't wait. Stop doesn't wait in that line either: it's one Escape the player expects at once, while a message can take Orca up to 30 s to type. It still waits for an answer's keys or an approval's read-and-press on that pane to finish (`withKeyLock` in `orca.js`), since an Escape in the middle would close the selector and the rest would be typed into the prompt box.
 
 The strip is drawn only while something is unacknowledged. "Something" means a status change such as opening the window or switching threads, or a queued command. It is redrawn when content changes and hidden as soon as a snapshot acknowledges its sequence number, usually in under a second. If nothing answers for 20 s, it hides and retries with backoff.
 
@@ -94,7 +91,7 @@ Each contains `Inbox.lua`, which assigns `OrcaWow_Inbox = { … }`. The bridge s
 
 A publish works like this:
 
-1. Build the snapshot: threads, projects, the viewed thread's messages, pending question or approval, usage, bridge status, command results and the ack. The model list rides along only when the addon's `modelsHash` is out of date. It is grouped per machine and provider, and each model points at one of a few shared sets of reasoning levels instead of carrying its own. Threads carry their reasoning level (`re`), projects the level their default model uses (`de`). With Orca, the snapshot carries the agents the bridge can start instead.
+1. Build the snapshot: threads (one per agent), projects (one per repo), the viewed thread's messages, pending question or approval, the agents a new worktree can start with, bridge status, command results and the ack.
 2. Write it to the slots the addon will load next (from its last confirmed position to a little past the bridge's prediction) and to slots 1–3 (what a `/reload` bootstraps from).
 3. Ring the next **bell**.
 
@@ -125,7 +122,7 @@ When few slots remain, intervals stretch 2–4×. When they run out, the addon o
 
 ## Orca side
 
-`orca.js` speaks the RPC the `orca` CLI uses, and hands the bridge T3-shaped threads, so the rest of the bridge doesn't care which backend it talks to. `orca-fleet.js` puts several Orcas behind that one interface.
+`orca.js` speaks the RPC the `orca` CLI uses, and hands the bridge one thread per agent; `threads.js` turns a thread into the state the game shows. `orca-fleet.js` puts several Orcas behind that one interface.
 
 **This PC.** Orca writes `orca-runtime.json` into its user-data folder (`%APPDATA%\orca` on Windows) with its named pipe's address (a unix socket elsewhere) and an auth token, both new on every launch. The bridge re-reads the file whenever it connects, and treats it as stale when the process it names has exited, so it never talks to whatever took over the pipe's name. Requests are NDJSON over the pipe. Streaming methods are refused there, so the bridge polls `worktree.ps`: quickly while an agent works or waits, slower when all are idle.
 
@@ -159,16 +156,6 @@ The transcript is the agent's last prompt, its last reply and the end of its ter
 - When the bridge refuses an approval or answer, the command result says why and the game shows the request again.
 - Messages and free-text answers with a line that starts with `!` run a shell command in Claude Code and Codex without asking. The bridge refuses them unless `orca-wow shell on` sets `allowShell` under `orca` in `config.json`. Slash commands (`/clear`) go through. Control characters (other than line breaks and tabs) are removed from the game's text first, so DEL or Ctrl+U can't edit a line into one that starts with `!`.
 
-## T3 Code side
-
-With `"backend": "t3"`, `t3.js` uses the same API as T3's own clients:
-
-- **Auth:** a session token from `t3 auth session issue --scope orchestration:read --scope orchestration:operate`, renewed a week before it expires.
-- **Live data:** `POST /api/auth/websocket-ticket/rpc` gets a ticket, then `/ws?orchestrationProtocol=2` opens Effect RPC JSON frames.
-- **Subscriptions:** `orchestration.subscribeShell` (thread list, live) and `subscribeServerConfig` (providers and usage limits).
-- **Thread detail:** `GET /api/orchestration/threads/:id/bounded`, fetched for the viewed thread and for active threads so the tracker can say what they're doing.
-- **Writes:** `orchestration.dispatchCommand` with `message.dispatch`, `run.interrupt`, `runtime-request.respond`, `thread.settle`, `thread.unsettle` and `thread.visit`; plus `orchestration.launchThread`.
-
 ## Running on Windows
 
 `install.ps1` copies the bridge and addon to `%LOCALAPPDATA%\orca-wow\app`, writes the `orca-wow.cmd` launcher next to it and runs `orca-wow install`. Install registers the bridge only from that copy, which only your account can change: a clone elsewhere (under `C:\`, say) may be writable by other accounts, whose code would then run at your logon.
@@ -181,7 +168,7 @@ The bridge runs as a Task Scheduler task at logon, in your interactive session, 
 
 While the window is open it takes the gamepad itself (`EnableGamePadButton` / `EnableGamePadStick`), so the character doesn't move and B closes the window. The D-pad moves between controls by position, with explicit routes where position isn't enough (thread list → message box, for example). Blizzard's `SmartNavigationPointerTemplate` draws the cursor.
 
-The addon never touches the binding-group APIs, which would taint the gamepad action bars, and avoids Blizzard's `Menu` (it caused "blocked action" errors). LB/RB switch tabs, X reads aloud, Y dictates, and the right stick scrolls the transcript. Forever has no on-screen keyboard, so text input uses dictation, quick replies and option buttons. The game menu gets an Orca (or T3 Code) button, and a controller chord opens the window.
+The addon never touches the binding-group APIs, which would taint the gamepad action bars, and avoids Blizzard's `Menu` (it caused "blocked action" errors). LB/RB switch tabs, X reads aloud, Y dictates, and the right stick scrolls the transcript. Forever has no on-screen keyboard, so text input uses dictation, quick replies and option buttons. The game menu gets an Orca button, and a controller chord opens the window.
 
 ## Security
 

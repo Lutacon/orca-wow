@@ -1,4 +1,4 @@
--- T3 Code for World of Warcraft: Forever.
+-- Orca for World of Warcraft: Forever.
 -- Namespace, saved settings, small helpers and an internal event bus.
 
 -- `ns` is deliberately not a global, so another addon or WeakAura can't just call
@@ -58,7 +58,7 @@ function ns.RecordError(err)
 	if not ns.errorNotified then
 		ns.errorNotified = true
 		if DEFAULT_CHAT_FRAME then
-			DEFAULT_CHAT_FRAME:AddMessage("|cffffd100" .. ns.AppName() .. "|r: |cffff4040something went wrong|r — type /orca errors for details.")
+			DEFAULT_CHAT_FRAME:AddMessage("|cffffd100Orca|r:|cffff4040something went wrong|r — type /orca errors for details.")
 		end
 	end
 end
@@ -111,8 +111,6 @@ local DEFAULTS = {
 		padChord = "auto",
 	},
 	drafts = {},
-	models = {}, -- project id -> the model last picked for new threads there
-	efforts = {}, -- project id -> the reasoning level last picked for new threads there
 	-- lastAgent (unset by default): the Orca agent id last picked for a new worktree
 	cmdId = 0,
 	sigNext = 1,
@@ -170,21 +168,16 @@ function ns.Ago(epoch)
 	return math.floor(d / 86400) .. "d"
 end
 
--- The app's name for chat lines ("Orca" or "T3 Code", from the latest snapshot).
-function ns.AppName()
-	return ns.Store and ns.Store:AppName() or "T3 Code"
-end
-
 function ns.Print(...)
 	local msg = strjoin(" ", tostringall(...))
-	DEFAULT_CHAT_FRAME:AddMessage(ns.Color("gold", ns.AppName()) .. ": " .. msg)
+	DEFAULT_CHAT_FRAME:AddMessage(ns.Color("gold", "Orca") .. ": " .. msg)
 end
 
 function ns.InCombat()
 	return InCombatLockdown() or false
 end
 
--- The player just used the T3 Code window (see Transport: "attending").
+-- The player just used the Orca window (see Transport: "attending").
 function ns.Interacted()
 	ns.lastInteraction = GetTime()
 end

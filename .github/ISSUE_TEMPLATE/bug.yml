@@ -5,14 +5,14 @@ body:
   - type: markdown
     attributes:
       value: |
-        This is an early, experimental release built for Omarchy 4.5.0, T3 Code Nightly and WoW: Forever. Detailed but straightforward reports help most: what happened, plainly, without an essay.
+        This is an early, experimental release, tested on Windows with Orca and WoW: Forever. Detailed but straightforward reports help most: what happened, plainly, without an essay.
 
   - type: input
     id: versions
     attributes:
       label: Versions
-      description: Omarchy (`omarchy-version`), T3 Code Nightly (`t3 --version`), orca-wow (`orca-wow status`), and your controller if it's involved.
-      placeholder: e.g. Omarchy 4.5.0, t3 v0.1.7-nightly.20261102, orca-wow 0.1.0, Xbox Series controller
+      description: Windows (`winver`), Orca (its About screen, on every computer involved), orca-wow (`orca-wow status`), and your controller if it's involved.
+      placeholder: e.g. Windows 11 24H2, Orca 1.4.255 (PC) and 1.4.255 (MacBook), orca-wow 0.3.0, Xbox Series controller
     validations:
       required: true
 

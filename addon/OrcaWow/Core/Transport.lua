@@ -65,7 +65,7 @@ local function SetKeys(hex)
 		-- only sees new files after a restart.
 		if not T.needsRestart then
 			T.needsRestart = true
-			ns.Print("T3 Code was updated with new files. Quit and restart the game (a /reload isn't enough) to finish.")
+			ns.Print("The addon was updated with new files. Quit and restart the game (a /reload isn't enough) to finish.")
 		end
 		return false
 	end
@@ -250,10 +250,7 @@ function T:Apply(data, bootstrap)
 		if fresh then db.gen = data.gen end
 		self.lastData = GetTime()
 		self.bridgeNow = data.now
-		local hadModels = ns.Store.modelsHash
 		ns.Store:Apply(data)
-		-- Tell the bridge we have the new list, or it keeps sending it with every update.
-		if ns.Store.modelsHash ~= hadModels then self:Touch() end
 	end
 	ns:Fire("LinkChanged")
 	return fresh
@@ -320,7 +317,6 @@ function T:Payload()
 	local hello = Codec.Record({
 		"H", 1, db.session, ns.ui, self.slotCursor, db.sigNext or 1, db.gen or 0,
 		self:Flags(), link and ns.viewId or "", ns.version, self.slotCount,
-		ns.Store.modelsHash or "",
 	})
 	if not link then return hello end
 	local limit = Codec.MAX_PAYLOAD - Codec.SEAL_OVERHEAD
@@ -414,7 +410,7 @@ function T:BridgeState()
 	local age = time() - (self.bridgeNow or 0)
 	local limit = ns.windowOpen and 200 or 900
 	if age > limit then return "stale" end
-	if ns.Store.data.bridge and ns.Store.data.bridge.t3 ~= "connected" then return "t3offline" end
+	if ns.Store.data.bridge and ns.Store.data.bridge.orca ~= "connected" then return "offline" end
 	return "connected"
 end
 

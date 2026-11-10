@@ -239,7 +239,7 @@ function UI.RefreshList()
 			header = o
 		else
 			choices = choices + 1
-			-- A row matches on its own text or its group's (a provider's name, say).
+			-- A row matches on its own text or its group's title.
 			if query == "" or matches(o.label) or matches(o.group) then
 				if header then
 					table.insert(filtered, header)

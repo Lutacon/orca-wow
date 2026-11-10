@@ -69,7 +69,7 @@ export function markdownToWow(md, { maxChars = 3500 } = {}) {
     }
   }
   let s = out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-  if (truncated) s += '\n' + color(DIM, '… (open the thread in T3 Code for the rest)');
+  if (truncated) s += '\n' + color(DIM, '… (open the agent in Orca for the rest)');
   return s;
 }
 

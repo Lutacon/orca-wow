@@ -1,8 +1,8 @@
 // Client for a running Orca (stablyai/orca): the IDE that runs CLI coding agents
 // (Claude Code, Codex, ...) in terminals, one git worktree each. It speaks the same
-// local RPC the `orca` CLI uses and hands the bridge T3-shaped threads, so the
-// helpers in t3.js and bridge.js (threadStatus, isUnread, pendingRequest, ...) work
-// unchanged.
+// local RPC the `orca` CLI uses and hands the bridge one thread per agent, in the
+// shape the helpers in threads.js and bridge.js (threadStatus, isUnread,
+// pendingRequest, ...) read.
 //
 // Transport: NDJSON over Orca's named pipe (unix socket elsewhere). Its address and
 // auth token live in <userData>/orca-runtime.json and change on every Orca launch,
@@ -404,7 +404,7 @@ export function approvalRows(menu) {
   return { yes, always };
 }
 
-// ---- mapping Orca rows to T3 threads -------------------------------------------
+// ---- mapping Orca rows to threads ----------------------------------------------
 
 const AGENT_NAMES = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', gemini: 'Gemini', omp: 'OMP', pi: 'Pi', grok: 'Grok', cursor: 'Cursor', copilot: 'Copilot', amp: 'Amp' };
 const iso = (ms) => (Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : undefined);
@@ -724,7 +724,7 @@ export class OrcaClient extends EventEmitter {
     const refs = new Map();
     for (const row of rows) {
       if (!row?.worktreeId || row.removing) continue;
-      // Subagents nest under their lead; T3 hid those the same way.
+      // Subagents nest under their lead: only leads get a thread.
       const agents = (row.agents || []).filter((a) => a?.paneKey && !a.parentPaneKey);
       const counts = {};
       for (const a of agents) counts[a.agentType] = (counts[a.agentType] || 0) + 1;
@@ -1032,7 +1032,7 @@ export class OrcaClient extends EventEmitter {
       if (err?.code === 'agent_prompt_blocked') throw new Error('The agent is waiting for an approval; answer it first.');
       throw err;
     });
-    // New work takes a settled agent off the Done column, as T3 did on a new message.
+    // New work takes a settled agent off the Done column.
     if (ref.row?.workspaceStatus === 'completed') {
       await this.call('worktree.set', { worktree: `id:${ref.worktreeId}`, workspaceStatus: 'in-progress' }).catch((err) => this.log(`Orca: worktree.set: ${err.message}`));
     }
@@ -1317,18 +1317,6 @@ export class OrcaClient extends EventEmitter {
         }
       }
     }
-  }
-
-  setModel() {
-    throw new Error("Orca's agents choose their own model");
-  }
-
-  defaultModelFor() {
-    return null;
-  }
-
-  modelGroups() {
-    return [];
   }
 
   // The new-worktree picker: which agents, and which one is preselected.

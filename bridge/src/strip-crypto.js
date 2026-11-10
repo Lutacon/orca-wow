@@ -34,8 +34,8 @@ export function loadOrCreateKey(stateDir) {
 
 export function deriveKeys(master) {
   const hmac = (label) => crypto.createHmac('sha256', master).update(label).digest();
-  const enc = hmac('t3code-wow strip encryption');
-  const mac = hmac('t3code-wow strip authentication');
+  const enc = hmac('orca-wow strip encryption');
+  const mac = hmac('orca-wow strip authentication');
   // What the addon gets in every snapshot.
   return { enc, mac, hex: enc.toString('hex') + mac.toString('hex') };
 }

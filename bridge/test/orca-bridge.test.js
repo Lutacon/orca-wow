@@ -1,4 +1,4 @@
-// The bridge with its default Orca backend, end to end against the fake Orca: what
+// The bridge end to end against the fake Orca: what
 // the game would receive in a snapshot, and a command from the game reaching Orca.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,7 +19,7 @@ async function waitFor(fn, ms = 5000) {
   }
 }
 
-test('the Orca backend feeds the snapshot and runs commands from the game', async (t) => {
+test('Orca feeds the snapshot and runs commands from the game', async (t) => {
   const orcaDir = tempDir();
   const addonsDir = tempDir();
   const stateDir = tempDir();
@@ -49,11 +49,10 @@ test('the Orca backend feeds the snapshot and runs commands from the game', asyn
     await orca.stop().catch(() => {});
     for (const d of [orcaDir, addonsDir, stateDir]) fs.rmSync(d, { recursive: true, force: true });
   });
-  assert.equal(b.backend, 'orca');
-  // Just the backend side of start(): no game process or screen capture in a test.
-  b.t3.on('change', (ev) => b.onT3Change(ev));
-  b.t3.start();
-  await waitFor(() => b.t3.state === 'connected' && b.t3.threads.size === 2);
+  // Just the Orca side of start(): no game process or screen capture in a test.
+  b.agents.on('change', (ev) => b.onAgentsChange(ev));
+  b.agents.start();
+  await waitFor(() => b.agents.state === 'connected' && b.agents.threads.size === 2);
 
   const blocked = threadIdFor('repo-1::C:/src/app/fix-login', 'tab-1:leaf-1');
   const done = threadIdFor('repo-1::C:/src/app/docs', 'tab-2:leaf-1');
@@ -61,10 +60,7 @@ test('the Orca backend feeds the snapshot and runs commands from the game', asyn
   await b.refreshView(blocked, true);
 
   const snap = b.buildSnapshot();
-  assert.equal(snap.bridge.backend, 'orca');
-  assert.equal(snap.bridge.t3, 'connected');
-  // An empty model list (sent once, so the addon drops any it held from T3).
-  assert.deepEqual(snap.models?.g, []);
+  assert.equal(snap.bridge.orca, 'connected');
   const byId = Object.fromEntries(snap.threads.map((x) => [x.id, x]));
   assert.equal(byId[blocked].s, 'input');
   assert.equal(byId[blocked].l, 'Needs your approval');
@@ -114,10 +110,6 @@ test('the Orca backend feeds the snapshot and runs commands from the game', asyn
   assert.equal(shell.ok, false);
   assert.match(shell.msg, /To allow it, run orca-wow shell on at the computer\.$/, 'the whole message reaches the game');
   assert.ok(!orca.callsOf('terminal.send').some((p) => p.text.startsWith('!')));
-
-  // A model change can't apply to Orca and says so instead of failing silently.
-  await b.runCommand({ id: 2, verb: 'model', args: [done, 'claude', 'opus'] });
-  assert.equal(b.results.find((r) => r.id === 2).ok, false);
 });
 
 // Orca reports when a wait starts, not what it shows: the thread doesn't change when the
@@ -139,9 +131,9 @@ test('a request the game saw before it changed on screen is refused once, then a
     await orca.stop().catch(() => {});
     for (const d of [orcaDir, addonsDir, stateDir]) fs.rmSync(d, { recursive: true, force: true });
   });
-  b.t3.on('change', (ev) => b.onT3Change(ev));
-  b.t3.start();
-  await waitFor(() => b.t3.state === 'connected' && b.t3.threads.size === 1);
+  b.agents.on('change', (ev) => b.onAgentsChange(ev));
+  b.agents.start();
+  await waitFor(() => b.agents.state === 'connected' && b.agents.threads.size === 1);
   const id = threadIdFor('repo-1::C:/src/app/fix-login', 'tab-1:leaf-1');
   b.client = { view: id, flags: 'o', session: 's', ui: 'u' };
   await b.refreshView(id, true);

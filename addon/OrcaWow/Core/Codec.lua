@@ -2,7 +2,7 @@
 -- so tools/lua-tests can run it outside the game.
 --
 -- Frame bytes:
---   [0x54 'T'] [0x33 '3'] [version] [seq hi, lo] [len hi, lo] [payload ...] [fletcher s1, s2]
+--   [0x4F 'O'] [0x57 'W'] [version] [seq hi, lo] [len hi, lo] [payload ...] [fletcher s1, s2]
 -- The checksum covers version..payload. Bytes are packed MSB-first into 3-bit cells,
 -- each drawn as a square whose R, G and B channels are fully on or off (bit 2 = R,
 -- bit 1 = G, bit 0 = B). Pure primaries survive gamma and contrast settings.
@@ -13,7 +13,7 @@ ns = ns or {}
 local Codec = {}
 ns.Codec = Codec
 
-Codec.MAGIC1, Codec.MAGIC2 = 0x54, 0x33
+Codec.MAGIC1, Codec.MAGIC2 = 0x4F, 0x57
 Codec.VERSION = 1 -- plaintext: only ever a bare hello
 Codec.ENCRYPTED = 2 -- nonce .. ChaCha20 ciphertext .. tag, see Crypto.lua
 Codec.SEAL_OVERHEAD = 20
