@@ -27,7 +27,7 @@ You need Windows 10 or 11 and **World of Warcraft: Forever** installed from Batt
    powershell -ExecutionPolicy Bypass -File .\install.ps1
    ```
    It puts the addon in the game, starts the bridge and tells you what to do next. If it can't find the game, add `--wow "D:\Games\World of Warcraft"` (the folder that contains `_forever_`).
-5. **Start World of Warcraft: Forever.** At character select, open **AddOns** and check that **Orca** is enabled. Its "live update slots" are grouped under it; leave them enabled. If Orca is listed as out of date, tick **Load out of date AddOns**.
+5. **Start World of Warcraft: Forever.** At character select, open **AddOns** and check that **Orca** is enabled. Under it are 1200 "Orca data slot" entries, which carry the updates from the bridge; leave them enabled. If Orca is listed as out of date, tick **Load out of date AddOns**.
 6. **Log in to a character.** The installer, still waiting in your terminal, says "Connected" when the game and the bridge talk to each other.
 7. In game, type `/orca` or click the Orca button on the minimap. From a controller, hold both triggers and press Back. `/orca selftest` checks the link step by step if something seems off.
 

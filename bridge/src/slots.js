@@ -224,9 +224,10 @@ export class SlotBank {
   slotToc() {
     return [
       `## Interface: ${INTERFACE}`,
-      '## Title: OrcaWow live update slot',
-      '## Notes: Carries live updates from the OrcaWow bridge. Leave it enabled.',
-      '## Author: Ryan Hughes',
+      '## Title: Orca data slot (leave enabled)',
+      '## Notes: Carries live updates from the orca-wow bridge into the game. Orca stops updating if these are turned off.',
+      '## Author: Lutacon, Ryan Hughes',
+      `## IconTexture: Interface\\AddOns\\${ADDON}\\Media\\icon`,
       '## LoadOnDemand: 1',
       `## Group: ${ADDON}`,
       '',
