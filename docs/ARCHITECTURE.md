@@ -1,11 +1,11 @@
 # Architecture
 
 ```
- WoW: Forever (Wine or macOS)                          t3code-wow bridge (Node, user service)
+ WoW: Forever (Wine or macOS)                          orca-wow bridge (Node, user service)
  ┌──────────────────────────────┐   pixels   ┌────────────────────────────────────────┐
- │ T3Code addon                 │──────────▶│ capture.js  grim, KWin, import, macOS   │
+ │ OrcaWow addon                │──────────▶│ capture.js  grim, KWin, import, macOS   │
  │  Transport.lua  strip, queue │            │ bridge.js   commands, pacing, snapshots │
- │  Store.lua      snapshot     │◀──────────│ slots.js    Inbox.lua into T3Code_S###  │
+ │  Store.lua      snapshot     │◀──────────│ slots.js    Inbox.lua into OrcaWow_S### │
  │  UI/*           window,      │   files    │             Signals/NNNNN.wav           │
  │                 tracker, pad │            │ t3.js       WebSocket RPC to T3 Code ───┼──▶ T3 Code server
  └──────────────────────────────┘            │ voice.js    speech, dictation           │
@@ -43,11 +43,11 @@ frames (all of them, once the addon has its keys) carry
 nonce(12)  ChaCha20(records)  HMAC-SHA-256(version, seq, nonce, ciphertext)[0..8]
 ```
 
-- The bridge makes a random master key per install (`~/.local/state/t3code-wow/strip.key`,
+- The bridge makes a random master key per install (`~/.local/state/orca-wow/strip.key`,
   mode 0600) and derives an encryption key and a MAC key from it. Both go into every
   snapshot it writes to the slots. Slot files are never on screen.
 - The addon keeps the keys in file-local variables in `Transport.lua`. They aren't on
-  the exported `T3Code` table and aren't saved. The slot global is cleared on load.
+  the exported `OrcaWow` table and aren't saved. The slot global is cleared on load.
 - Nonces are a per-load prefix (time and random bytes) plus a counter, and a frame is
   re-sealed only when its content changes.
 - Version 1 (plaintext) frames are only ever a bare hello with no thread id. The addon
@@ -104,15 +104,15 @@ retries with backoff.
 
 **macOS.** The bridge finds the game window in CoreGraphics' window list (through a JXA script run by `osascript`, so there's nothing to compile) and captures the corner with `screencapture -R`, which returns physical pixels on a Retina display. The strip can start below the window's top: under a windowed game's title bar, or below the notch of a MacBook display in fullscreen. So the decoder searches 40 extra points down instead of guessing either height. Both tools run as the bridge, which needs the Screen Recording permission; the bridge asks for it when it starts.
 
-**KDE Plasma.** KWin doesn't implement wlroots' screencopy, so `grim` can't read it. The bridge uses KWin's D-Bus API through `busctl` (part of systemd): `org.kde.krunner1.Match` on `/WindowsRunner` lists windows captioned "World of Warcraft", `getWindowInfo` gives each one's frame geometry, pid, desktops and minimized state, and `org.kde.KWin.ScreenShot2.CaptureArea` writes the corner's raw pixels (a QImage format KWin names in its reply) into a pipe the bridge passes as fd 3. It asks for native resolution so the cells aren't resampled on a scaled display, and searches 40 pixels down for a windowed game's title bar, as on macOS. Screenshots use `CaptureWindow`, which renders the window even while it's covered. On KWin 6.8 these calls work without the `X-KDE-DBUS-Restricted-Interfaces` grant that Spectacle's desktop file carries; if a later KWin refuses them, the error shows in `t3code-wow status`.
+**KDE Plasma.** KWin doesn't implement wlroots' screencopy, so `grim` can't read it. The bridge uses KWin's D-Bus API through `busctl` (part of systemd): `org.kde.krunner1.Match` on `/WindowsRunner` lists windows captioned "World of Warcraft", `getWindowInfo` gives each one's frame geometry, pid, desktops and minimized state, and `org.kde.KWin.ScreenShot2.CaptureArea` writes the corner's raw pixels (a QImage format KWin names in its reply) into a pipe the bridge passes as fd 3. It asks for native resolution so the cells aren't resampled on a scaled display, and searches 40 pixels down for a windowed game's title bar, as on macOS. Screenshots use `CaptureWindow`, which renders the window even while it's covered. On KWin 6.8 these calls work without the `X-KDE-DBUS-Restricted-Interfaces` grant that Spectacle's desktop file carries; if a later KWin refuses them, the error shows in `orca-wow status`.
 
 ## Bridge → game: slots and signals
 
-`T3Code_S001…S1200` (1,200 by default) are load-on-demand addons grouped under T3Code in
+`OrcaWow_S001…S1200` (1,200 by default) are load-on-demand addons grouped under OrcaWow in
 the addon list (`## Group`). They deliberately have no `## Dependencies`: WowUp hides
 an unrecognised load-on-demand folder only when all its dependencies are recognised, and
-T3Code isn't on CurseForge, so a dependency on it made every slot its own "Unknown" row
-(1,200 rows, measured with WowUp 2.24). Without it WowUp shows one "T3 Code" entry.
+OrcaWow isn't on CurseForge, so a dependency on it made every slot its own "Unknown" row
+(1,200 rows, measured with WowUp 2.24). Without it WowUp shows one "Orca" entry.
 
 Addon managers also fingerprint each folder (a 32-bit hash of the `.toc` and the files it
 lists) and look it up across all of CurseForge. A slot that listed `Inbox.lua` directly
@@ -122,7 +122,7 @@ identical and lists a static `Slot.xml`, which loads `Inbox.lua` with
 `<Script file="Inbox.lua"></Script>`. The scanners only follow self-closing `<Script/>`
 tags, so all slots share one fixed fingerprint that matches nothing on CurseForge
 (checked with WowUp's own hashing code and a rescan).
-Each contains `Inbox.lua`, which assigns `T3Code_Inbox = { … }`. The bridge serializes
+Each contains `Inbox.lua`, which assigns `OrcaWow_Inbox = { … }`. The bridge serializes
 plain data with `luaser.js`, so thread text can never become code. All text is escaped
 for WoW markup (`|` → `||`), then markdown is turned into colors and bullets.
 

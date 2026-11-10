@@ -1,0 +1,49 @@
+# Install or update Orca for World of Warcraft: Forever on Windows.
+#
+#   powershell -ExecutionPolicy Bypass -File .\install.ps1 [--wow "C:\path\World of Warcraft"] [--slots N] [--no-service]
+#
+# Run it again to update. Copies the bridge and addon to %LOCALAPPDATA%\orca-wow\app,
+# adds an orca-wow.cmd launcher next to it, then runs `orca-wow install`, which puts the
+# addon into the game, registers the bridge as a logon task and walks you through the
+# first launch. Needs Node.js 22 or newer (winget install OpenJS.NodeJS.LTS).
+
+$ErrorActionPreference = 'Stop'
+
+$node = Get-Command node -ErrorAction SilentlyContinue
+if (-not $node) {
+  Write-Host 'Orca for World of Warcraft needs Node.js 22 or newer: winget install OpenJS.NodeJS.LTS' -ForegroundColor Red
+  exit 1
+}
+$major = [int](& $node.Source -p 'process.versions.node.split(".")[0]')
+if ($major -lt 22) {
+  Write-Host "Orca for World of Warcraft needs Node.js 22 or newer; found $(& $node.Source --version)." -ForegroundColor Red
+  exit 1
+}
+
+$src = $PSScriptRoot
+if (-not ((Test-Path (Join-Path $src 'bridge')) -and (Test-Path (Join-Path $src 'addon')))) {
+  Write-Host "Run this script from a copy of the repository (it needs the bridge and addon folders next to it)." -ForegroundColor Red
+  exit 1
+}
+
+$root = Join-Path $env:LOCALAPPDATA 'orca-wow'
+$dest = Join-Path $root 'app'
+New-Item -ItemType Directory -Force -Path $dest | Out-Null
+
+# Replace the installed copy as a whole, so files removed upstream don't linger.
+foreach ($part in 'bridge', 'addon') {
+  $new = Join-Path $dest "$part.new"
+  if (Test-Path $new) { Remove-Item -Recurse -Force $new }
+  Copy-Item -Recurse -Path (Join-Path $src $part) -Destination $new
+  $old = Join-Path $dest $part
+  if (Test-Path $old) { Remove-Item -Recurse -Force $old }
+  Rename-Item -Path $new -NewName $part
+}
+
+$cli = Join-Path $dest 'bridge\bin\orca-wow.js'
+$launcher = Join-Path $root 'orca-wow.cmd'
+Set-Content -Path $launcher -Encoding ascii -Value "@echo off`r`n`"$($node.Source)`" `"$cli`" %*"
+Write-Host "Command: $launcher (add $root to PATH to type just orca-wow)"
+
+& $node.Source $cli install @args
+exit $LASTEXITCODE

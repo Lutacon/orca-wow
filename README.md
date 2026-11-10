@@ -1,127 +1,108 @@
-# T3 Code for World of Warcraft
+# Orca for World of Warcraft
 
-Watch and run your [T3 Code](https://t3.codes) agent threads without leaving the game. It's a native addon for World of Warcraft: Forever, built from Blizzard's own UI templates so it looks and plays like the rest of the interface, plus a small bridge that connects it to T3 Code.
+Mira y maneja los agentes de [Orca](https://github.com/stablyai/orca) (Claude Code, Codex… cada uno en su worktree) sin salir de **World of Warcraft: Forever**, en Windows.
 
-> [!WARNING]
-> **Early release, still experimental.** It's built for and tested on one setup: **Omarchy 4.5.0**, **T3 Code Nightly** (0.1.7-nightly) and **World of Warcraft: Forever** (1.60.x) under Proton. **macOS** with the native client and **CachyOS** with KDE Plasma are new and less tested (see [macOS](#macos) and [CachyOS and KDE Plasma](#cachyos-and-kde-plasma)). Other setups may work but aren't supported yet. T3 Code Nightly's API changes often, so a T3 update can break things until this catches up. Expect rough edges, and please [report them](https://github.com/ryanrhughes/t3code-wow/issues).
+Fork de [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow), que hacía lo mismo con T3 Code en Linux y macOS. Este fork añade Windows y un backend para Orca. El de T3 sigue disponible con `"backend": "t3"`. El plan de trabajo y su estado están en [PLAN.md](PLAN.md).
 
-## What it does
+> Experimental. Las APIs que usa de Orca (la named pipe local) son internas y pueden cambiar entre versiones.
 
-- **T3 Code window** (`/t3`): your threads grouped into Working, Open and Settled, filtered by project or machine. Read a thread, reply, steer a working thread or queue follow-ups, stop a run, settle or reopen it, start new threads, answer the agent's questions and approve its requests.
-- **Quest tracker**: what's running, what needs you and what just finished, right under your quests, with live timers.
-- **Notices**: a toast, a sound and a chat line when a thread finishes or needs you. They wait until combat ends, and stay quiet in dungeons and raids if you like.
-- **Full controller support**: the D-pad moves between controls, A selects, B goes back, LB/RB switch tabs, X reads aloud and holding Y dictates. Hold both triggers and press Back to open it from anywhere.
-- **Voice**: dictate replies with Omarchy's dictation, and have replies read aloud by your desktop voice (on macOS, the system voice) or the game's.
-- **Screenshots**: attach what's on your screen to a message so the agent can see your game.
-- **Every machine**: threads from your other computers via T3 Connect, all in one list.
-- **Usage**: your providers' plans and limits, the same as Omarchy's Agents panel shows.
-- A minimap button and a game-menu entry, for opening it without a keyboard.
+## Qué hace
 
-## Requirements
+- Una ventana en el juego (`/orca`) con tus agentes de Orca agrupados por estado: trabajando, te necesitan o terminados. Cada uno muestra su último prompt, su última respuesta y el final de su terminal.
+- **Escribirle** a un agente, **pararlo** (Esc) y **responder sus permisos**: Sí, "Sí, no volver a preguntar" o No. También responder a sus preguntas de opciones.
+- **Abrir un worktree nuevo** en cualquier repo de Orca, eligiendo el agente (Claude, Codex, OpenCode…), el nombre del worktree y la rama base, con tu prompt. **Marcar como hecho** o **dormir** su worktree.
+- **Varios Orca a la vez**: el de este PC y los de otros ordenadores de tu red, como un MacBook. Ver más abajo.
+- Avisos cuando un agente termina o pide algo: toast, sonido, línea en el chat y una sección en el tracker de objetivos. Se aplazan en combate.
+- Lectura en voz alta con la voz de Windows. Mando compatible.
 
-- **Omarchy 4.5.0** (Hyprland), **CachyOS** with KDE Plasma (see [CachyOS and KDE Plasma](#cachyos-and-kde-plasma)), or **macOS** (see [macOS](#macos)). On Omarchy the bridge reads the game window with Hyprland's screen capture, and dictation and usage come from Omarchy's own tools.
-- **T3 Code Nightly**, installed and running. Its `t3` command gives the bridge a login.
-- **World of Warcraft: Forever**, installed with Battle.net: Omarchy's Battle.net (Proton), Battle.net in Faugus Launcher, Lutris or Steam on CachyOS, or the native Mac app.
-- **Node.js 22** or newer.
-- **Game sound on.** The addon learns about new updates through silent sounds; with sound off it falls back to slower polling.
+## Requisitos
 
-## Install
+- Windows 10/11 con **World of Warcraft: Forever** instalado desde Battle.net. Funciona en ventana o en pantalla completa sin bordes.
+- **Orca** abierto en este ordenador o en otro de tu red (ver "Orca en otro ordenador").
+- **Node.js 22+**: `winget install OpenJS.NodeJS.LTS`.
+- Nada más. El ayudante de captura se compila con el compilador de C# que ya trae Windows (.NET Framework 4).
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/ryanrhughes/t3code-wow/main/install.sh | bash
-```
+## Instalar
 
-It finds World of Warcraft: Forever in Omarchy's Battle.net, in the prefixes Faugus Launcher and Lutris recorded, or wherever Battle.net installed it (for anything unusual, add `bash -s -- --wow "/path/to/World of Warcraft"`). It installs the addon into the game, gives the bridge a T3 Code session limited to reading and running threads, and starts the bridge as the `t3code-wow` user service.
-
-Then it tells you what to do in the game and waits until the game checks in. The first time, **fully quit and restart World of Warcraft**: the game only finds new addon folders when it starts. After that, updates only need a `/reload`.
-
-To install from a clone instead, run `./install.sh` in it.
-
-### Update
-
-Run the same install command again:
+Con el juego **cerrado**, desde una copia del repo, en una terminal tuya (no hace falta ser administrador):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ryanrhughes/t3code-wow/main/install.sh | bash
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-It downloads the latest version, replaces the installed copy and restarts the bridge, keeping your settings, T3 Code session and machines. Then type `/reload` in game; the installer tells you when an update needs a full game restart instead. To install a specific release, pipe to `T3CODE_WOW_REF=v0.2.0 bash` instead of `bash`. From a clone, `git pull` and run `./install.sh` again.
+El instalador hace esto:
 
-### macOS
+1. Copia el bridge y el addon a `%LOCALAPPDATA%\orca-wow\app`.
+2. Instala el addon y sus 1200 carpetas de actualización (`OrcaWow_S###`) en `_forever_\Interface\AddOns`.
+3. Registra el bridge como tarea al iniciar sesión, sin ventana y reiniciándolo si falla. Su log va a `%LOCALAPPDATA%\orca-wow\state\bridge.log`.
+4. Espera a que entres al juego.
 
-The same install command works on a Mac with the native WoW: Forever client. Install Node.js 22 first (`brew install node`). The installer finds the game in `/Applications/World of Warcraft` or wherever Battle.net put it, and runs the bridge as a launch agent (`~/Library/LaunchAgents/t3code-wow.plist`) instead of a systemd service.
+Opciones: `--wow "D:\Juegos\World of Warcraft"`, `--slots N` y `--no-service` (en ese caso lo arrancas tú con `orca-wow run`).
 
-- **Screen Recording permission.** The bridge reads the strip with macOS's `screencapture`, so it needs Screen Recording. The first time it runs, macOS asks, or lists `node` switched off under System Settings > Privacy & Security > Screen & System Audio Recording. Turn it on, then restart the bridge with `launchctl kickstart -k gui/$(id -u)/t3code-wow`. If the link stays down, `t3code-wow status` names the exact `node` it needs. The permission belongs to that `node` binary, so other programs that run with it can record the screen too. After you upgrade Node, macOS asks again for the new one.
-- **Display settings.** Run the game at the display's full resolution (its Retina resolution on a Retina display), fullscreen or windowed. A resolution the display stretches blurs the strip.
-- **Speech** uses the system voice (`say`). **Dictation** isn't available on macOS yet, and the Usage tab shows what T3 Code reports.
-- `~/.local/bin` isn't on a Mac's PATH by default. The installer says so; add it to your shell profile, or run `~/.local/bin/t3code-wow`.
+**Actualizar:** vuelve a ejecutar `install.ps1`. Si solo ha cambiado el código del addon, basta con `/reload`. Si hay carpetas o sonidos nuevos, hay que reiniciar el juego.
 
-### CachyOS and KDE Plasma
+**Desinstalar:** `%LOCALAPPDATA%\orca-wow\orca-wow.cmd uninstall`.
 
-The same install command works on CachyOS (or another Arch system) running KDE Plasma 6. Install Node.js first (`sudo pacman -S nodejs`). The installer finds Battle.net in any prefix Faugus Launcher or Lutris knows about, in `~/Faugus`, or in Steam, Bottles and Heroic prefixes.
+## Orca en otro ordenador (p. ej. un MacBook)
 
-- **Screen link.** KWin doesn't support the screen capture `grim` uses, so the bridge reads the game through KWin's own D-Bus screenshot interface with `busctl`, which ships with systemd. There's nothing to install or allow. The game must be on the current virtual desktop and not minimized.
-- **Screenshots** come out as JPEG when ImageMagick is installed (`sudo pacman -S imagemagick`), and as PNG otherwise.
-- **Speech** needs a desktop voice: `sudo pacman -S speech-dispatcher espeak-ng`. **Dictation** uses `voxtype` with `pw-record` if you have them. The Usage tab shows what T3 Code reports.
-- Other desktops on CachyOS: Hyprland works like Omarchy (install `grim`), and an X11 session uses ImageMagick's `import`. GNOME isn't supported, since it doesn't let other programs capture the screen without asking every time.
+El bridge puede mostrar los agentes de uno o varios Orca de otros ordenadores de tu red (o de tu Tailscale), además del Orca de este PC o en lugar de él. Usa el mismo canal cifrado de extremo a extremo que la app móvil de Orca.
 
-### Uninstall
+1. En el Mac, en Orca, ve a **Settings → Remote Orca Servers → Advertise this app as a server → New Link**. En **Connection address** elige la IP de red local del Mac (no `127.0.0.1`) y pulsa **Generate Access Link**. Copia el enlace `orca://pair?code=…` que aparece en "Pair another Orca client".
+   - Alternativa desde la terminal del Mac: `orca pair --address <ip-del-mac>`. Hace falta un enlace de **escritorio**: los de móvil (`--mobile`) no sirven.
+2. En el PC:
+   ```bash
+   %LOCALAPPDATA%\orca-wow\orca-wow.cmd remote add MacBook "orca://pair?code=..."
+   ```
+   Comprueba la conexión antes de guardarla y reinicia el bridge.
+3. Si el Mac tiene el cortafuegos activado, permite que Orca acepte conexiones entrantes. Por defecto usa el puerto 6768.
 
-```bash
-t3code-wow uninstall
-```
+Otros comandos:
+- `orca-wow remote list` muestra los Orca remotos y si responden.
+- `orca-wow remote remove MacBook` quita uno. Para revocar el acceso en el Mac, usa Settings → Remote Orca Servers → Shared Server Access.
+- `orca-wow local off` deja de mostrar el Orca de este PC.
 
-This removes the addon and its update folders, its settings in the game, the bridge service (or launch agent), the bridge's T3 Code sessions (here and on any machine you added) and its files. On macOS, also turn `node` off under Screen & System Audio Recording: uninstalling can't do that for you.
+En el juego, los agentes de cada ordenador llevan su nombre y se pueden filtrar por ordenador. Los secretos del enlace (token del dispositivo y clave del Mac) se guardan aparte, en `%LOCALAPPDATA%\orca-wow\config\remotes\`, nunca en `config.json` ni en los logs.
 
-## Using it
+## Usarlo
 
-- `/t3` opens or closes the window. You can also use the minimap button, the game menu (Esc), or hold both triggers and press Back on a controller.
-- `/t3 new` starts a thread, `/t3 usage` opens the usage tab, `/t3 settings` the settings.
-- `/t3 unlock` lets you drag the tracker section somewhere else; Settings → Reset tracker puts it back under your quests.
-- To see threads from another machine on your tailnet, run `t3code-wow env add <host>`. It finds the machine's T3 Code over Tailscale and creates a session for the bridge over SSH.
+| En el juego | |
+|---|---|
+| `/orca` | abrir o cerrar la ventana (también con el botón del minimapa) |
+| `/orca new <texto>` | lanzar un agente nuevo (opciones: `--agent codex --name mi-rama --base develop`) |
+| `/orca selftest` | comprobar el enlace paso a paso, con el tiempo de ida y vuelta |
+| `/orca status` | estado del bridge y de Orca |
 
-## Commands
+| En el ordenador | |
+|---|---|
+| `orca-wow status [--log]` | lo que ve el bridge (Orca, juego, captura, addon) |
+| `orca-wow probe` | captura la esquina del juego e intenta leer la franja |
+| `orca-wow run --verbose` | el bridge en primer plano |
 
-```bash
-t3code-wow status         # what the bridge sees: T3 Code, the game, the screen link, the addon
-t3code-wow status --log   # the same, with recent log lines
-t3code-wow env            # other machines shown in game (add <host> / remove <name>)
-t3code-wow uninstall      # remove everything (see above)
-```
+## Cómo funciona
 
-## When something's wrong
+Un addon de WoW no puede usar la red ni leer ficheros. El bridge hace de puente así:
 
-1. Run `t3code-wow status --log` and check each line.
-2. In game, run `/t3 selftest`. It checks each step between the game and T3 Code and says which one fails.
-3. `/t3 report` fills the T3 Code message box with diagnostics and attaches a screenshot of your game. Send it to an agent, or copy the text into an issue.
+- **Del juego al bridge:** el addon pinta una franja de celdas de color, cifrada, en la esquina superior izquierda. Un ayudante nativo (`bridge/native/wowhelper.cs`) la copia de la pantalla en unos 16 ms. Si otra ventana la tapa, usa `PrintWindow`.
+- **Del bridge al juego:** el bridge escribe los datos en addons *LoadOnDemand* (`OrcaWow_S###`) y el addon carga el siguiente cuando un archivo de sonido silencioso "suena".
+- **Del bridge a Orca:** usa la named pipe local de Orca (`%APPDATA%\orca\orca-runtime.json` da la ruta y el token). Consulta `worktree.ps` cada 2–6 s, lee los terminales con `terminal.read` y escribe en ellos con `terminal.send`, como hacen el CLI y la app móvil de Orca.
 
-If the tracker says live updates are paused, do a `/reload`: the game allows a fixed number of updates per session (1,200 by default), which normally lasts many hours.
+Los detalles del enlace con el juego están en [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## How it works
+## Limitaciones
 
-Addons can't open network connections or read files, so the addon and the bridge talk through what the game does allow:
+- La ventana del juego tiene que estar en pantalla (no minimizada) para que el bridge lea la franja.
+- Hay 1200 actualizaciones por sesión de interfaz. Cuando se acaban, haz `/reload`.
+- Los mensajes van limitados a unos 2000 caracteres. El historial se reduce al último prompt, la última respuesta y el final del terminal.
+- Las preguntas y los menús de permisos se leen de la pantalla del terminal del agente. Los agentes en modo chat de Orca son solo de lectura.
+- "Marcar hecho", "Reabrir" y "Dormir" afectan al worktree entero.
+- El dictado por voz aún no está disponible en Windows.
 
-| Direction | How |
-| --- | --- |
-| Game → bridge | A small strip of coloured squares in the top-left corner for about a second after you do something. The bridge reads it with a screen capture (`grim` on Hyprland, KWin's D-Bus screenshot interface on KDE Plasma, `screencapture` on macOS). |
-| Bridge → game | Load-on-demand "slot" addons. The game reads a slot's Lua from disk when it loads, so the bridge writes a fresh snapshot there first. |
-| "New data" signal | Large silent sound files the bridge fills or empties. The game re-reads big sounds every time it plays them, so the addon knows when to load the next slot. |
+## Créditos
 
-The bridge talks to T3 Code over the same WebSocket API its apps use. Details, measurements and design decisions are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow) (MIT, © 2026 Ryan Hughes): el addon, el enlace por franja, slots y campanas, y el bridge del que parte este fork.
+- [DSilence/t3wow](https://github.com/DSilence/t3wow): referencia para Windows.
+- [wow-ai](https://github.com/chelinho139/wow-ai) y [wow-forever-codex](https://github.com/0xinuarashi/wow-forever-codex), cuyas mediciones del cliente Forever sostienen la técnica de franja y slots.
 
-- **The strip is encrypted.** Streams and recordings show it, so every frame is encrypted and authenticated (ChaCha20 and HMAC-SHA-256) with a key only the bridge and your addon have. To anyone else it's noise, and the bridge ignores anything it can't authenticate.
-- **Addon managers.** WowUp shows a single "T3 Code" entry. Leave the `T3Code_S###` folders alone: the addon needs them.
-- **Nothing else.** The addon never sends anything to Blizzard. The bridge doesn't read game memory or press keys for you; it reads pixels and writes files in the addon folder.
+## Licencia
 
-## Contributing
-
-Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request. Coding agents should start with [AGENTS.md](AGENTS.md).
-
-## Credits
-
-- [wow-ai](https://github.com/chelinho139/wow-ai) and [wow-forever-codex](https://github.com/0xinuarashi/wow-forever-codex) measured how the Forever client loads files, plays sounds and handles the gamepad. The strip-and-slot approach builds on their work.
-- [Bellular](https://www.youtube.com/@BellularGaming) ([@BellularGaming](https://x.com/BellularGaming)) gave the idea of making this an in-game addon instead of a desktop overlay.
-
-## License
-
-[MIT](LICENSE). This is a fan project, not affiliated with or endorsed by Blizzard Entertainment. World of Warcraft is a trademark of Blizzard Entertainment. Use it at your own discretion.
+[MIT](LICENSE). Proyecto de fans, sin relación con Blizzard Entertainment, Stably (Orca) ni T3. World of Warcraft es una marca de Blizzard Entertainment.
