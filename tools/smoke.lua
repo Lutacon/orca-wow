@@ -281,6 +281,38 @@ ns.Main:ApplyScale()
 check(true, "window scale applied")
 ns.db.settings.windowScale = "auto"
 
+-- Resizing: the saved size stays between the default and the screen.
+do
+	local f = ns.Main.frame
+	UIParent._w, UIParent._h = 1920, 1080
+	ns.db.settings.windowSize = { 1200, 800 }
+	ns.Main:ApplyScale()
+	check(f:GetWidth() == 1200 and f:GetHeight() == 800, "a saved size is restored")
+	ns.db.settings.windowSize = { 5000, 300 }
+	ns.Main:ApplyScale()
+	check(f:GetWidth() == 1920 and f:GetHeight() == 640, "a saved size is kept on screen and no smaller than the default: " .. f:GetWidth() .. "x" .. f:GetHeight())
+	f.ResizeGrip._scripts.OnClick(f.ResizeGrip, "RightButton")
+	check(ns.db.settings.windowSize == nil and f:GetWidth() == 940, "right-clicking the grip puts the default size back")
+	UIParent._w, UIParent._h = nil, nil
+end
+
+-- Copying: the game has no clipboard, so the text goes in a box, without markup.
+do
+	local text = ns.CopyableText("|cffffffffbold|r and ||pipe |A:common-icon-checkmark:14:14|a|Tx:0|tdone")
+	check(text == "bold and ||pipe done", "copied text loses colors and icons, keeps escaped bars: " .. text)
+	local f = ns.UI.ShowCopy("|cff66bbffcode|r here")
+	check(f:IsShown() and f.Box:GetInputText() == "code here" and f.Box:GetEditBox():HasFocus(), "the copy box opens with the plain text, focused")
+	f.Box:GetEditBox()._scripts.OnTextChanged(f.Box:GetEditBox(), true)
+	check(f.Box:GetEditBox():GetText() == "code here", "typing in the copy box puts the text back")
+	f:Hide()
+	local saved = ns.Store.View
+	ns.Store.View = function() return { msgs = { { r = "a", t = "first reply" }, { r = "u", t = "a question" }, { r = "a", t = "|cffffffffthe answer|r" }, { r = "u", t = "thanks" } } } end
+	ns.Main.frame.Bar.Copy:Click()
+	ns.Store.View = saved
+	check(f:IsShown() and f.Box:GetInputText() == "the answer", "the bar's copy button copies the latest reply: " .. f.Box:GetInputText())
+	f:Hide()
+end
+
 -- Transitions -> toast
 local t = ns.Store.data.threads[1]
 local before = t.s

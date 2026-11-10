@@ -58,13 +58,17 @@ local function InitMessage(frame, ed)
 		frame.Body:SetJustifyH("LEFT")
 		frame.Body:SetJustifyV("TOP")
 		frame.Body:SetSpacing(BODY_SPACING)
+		frame.Copy = UI.IconButton(frame, "Interface\\Buttons\\UI-GuildButton-PublicNote-Up", 18, nil, nil)
+		frame.Copy.Background:Hide()
+		frame.Copy:SetPoint("TOPRIGHT", -6, -4)
+		frame.Copy:SetAlpha(0.8)
+		UI.Tooltip(frame.Copy, "Copy text", "Opens this message in a box where you can copy it with Ctrl+C.")
 		frame.Speak = UI.IconButton(frame, "voicechat-icon-speaker", 18, nil, nil)
 		frame.Speak.Background:Hide()
-		frame.Speak:SetPoint("TOPRIGHT", -6, -4)
+		frame.Speak:SetPoint("RIGHT", frame.Copy, "LEFT", -4, 0)
 		frame.Speak:SetAlpha(0.8)
 		UI.Tooltip(frame.Speak, "Read aloud")
 		frame.Time = frame:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
-		frame.Time:SetPoint("RIGHT", frame.Speak, "LEFT", -6, 0)
 	end
 	local m = ed.msg
 	if m.r == "u" then
@@ -91,6 +95,9 @@ local function InitMessage(frame, ed)
 	frame.Time:SetText(m.at and date("%H:%M", m.at) or "")
 	frame.Speak:SetShown(m.r == "a")
 	frame.Speak:SetScript("OnClick", function() ns.Speak(m.t, ns.viewId, m.n) end)
+	frame.Copy:SetScript("OnClick", function() UI.ShowCopy(m.t) end)
+	frame.Time:ClearAllPoints()
+	frame.Time:SetPoint("RIGHT", m.r == "a" and frame.Speak or frame.Copy, "LEFT", -6, 0)
 end
 
 local function InitNote(frame, ed)
@@ -181,7 +188,15 @@ function T:Create(parent, header, composer)
 	ScrollUtil.InitScrollBoxListWithScrollBar(scrollBox, scrollBar, view)
 	self.scrollBox, self.scrollBar, self.view = scrollBox, scrollBar, view
 
-	scrollBox:SetScript("OnSizeChanged", function() T:Relayout() end)
+	-- While the window is being resized this fires every frame; measure once it settles.
+	scrollBox:SetScript("OnSizeChanged", function()
+		if T.relayoutQueued then return end
+		T.relayoutQueued = true
+		C_Timer.After(0.1, function()
+			T.relayoutQueued = nil
+			T:Relayout()
+		end)
+	end)
 end
 
 function T:Relayout()

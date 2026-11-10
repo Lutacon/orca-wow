@@ -57,8 +57,7 @@ function M:Create()
 	drag:SetScript("OnDragStart", function() f:StartMoving() end)
 	drag:SetScript("OnDragStop", function()
 		f:StopMovingOrSizing()
-		local point, _, rel, x, y = f:GetPoint()
-		ns.db.settings.windowPoint = { point, rel, x, y }
+		M:SaveGeometry()
 	end)
 	local wp = ns.db.settings.windowPoint
 	if wp then
@@ -68,12 +67,12 @@ function M:Create()
 
 	-- Subtitle: the agent you're looking at, and the link status under it.
 	f.Subtitle = UI.Text(f, "GameFontNormalLarge", "CENTER")
-	f.Subtitle:SetPoint("TOP", 20, -30)
-	f.Subtitle:SetWidth(WIDTH - 220)
+	f.Subtitle:SetPoint("TOPLEFT", 130, -30)
+	f.Subtitle:SetPoint("TOPRIGHT", -90, -30)
 	f.Subtitle:SetWordWrap(false)
 	f.Status = UI.Text(f, "GameFontGreenSmall", "CENTER")
-	f.Status:SetPoint("TOP", f.Subtitle, "BOTTOM", 0, -2)
-	f.Status:SetWidth(WIDTH - 220)
+	f.Status:SetPoint("TOPLEFT", f.Subtitle, "BOTTOMLEFT", 0, -2)
+	f.Status:SetPoint("TOPRIGHT", f.Subtitle, "BOTTOMRIGHT", 0, -2)
 
 	-- Collapse the agent list (arrow under the close button).
 	f.SidebarToggle = UI.IconButton(f, "common-icon-backarrow", 24, "Hide the agent list", function() M:ToggleSidebar() end)
@@ -96,6 +95,7 @@ function M:Create()
 
 	-- Bottom button bar.
 	self:CreateButtonBar(f)
+	self:CreateResizeGrip(f)
 
 	-- Side tabs.
 	f.Tabs = {
@@ -387,10 +387,14 @@ function M:CreateButtonBar(f)
 		if button == "RightButton" then M:RemoveScreenshots() else M:AttachScreenshot() end
 	end)
 	UI.Tooltip(bar.Shot, "Attach a screenshot", "Adds a screenshot of the game to your next message. Right-click to remove it. /orca report also adds diagnostics.")
+
+	bar.Copy = UI.IconButton(f, "Interface\\Buttons\\UI-GuildButton-PublicNote-Up", 26, nil, function() M:CopyLatest() end)
+	bar.Copy:SetPoint("LEFT", bar.Shot, "RIGHT", 6, 0)
+	UI.Tooltip(bar.Copy, "Copy the latest reply", "Opens the agent's latest reply in a box where you can copy it with Ctrl+C. Each message also has its own copy button, next to its time.")
 	UI.Tooltip(bar.Speak, nil, "Read the latest reply aloud.")
 
 	bar.Send = UI.Button(f, "Send", 110, function() M:Send() end)
-	bar.Send:SetPoint("BOTTOMRIGHT", -6, 4)
+	bar.Send:SetPoint("BOTTOMRIGHT", -26, 4) -- clear of the resize grip
 	f.Bar = bar
 end
 
@@ -404,7 +408,7 @@ function M:ShowPage(page)
 	for name, p in pairs(f.Pages) do p:SetShown(name == page) end
 	for _, tab in ipairs(f.Tabs) do tab:SetChecked(tab.page == page) end
 	local threads = page == "threads"
-	for _, key in ipairs({ "Back", "Stop", "Mic", "Speak", "Shot", "Send" }) do f.Bar[key]:SetShown(threads) end
+	for _, key in ipairs({ "Back", "Stop", "Mic", "Speak", "Shot", "Copy", "Send" }) do f.Bar[key]:SetShown(threads) end
 	f.SidebarToggle:SetShown(threads)
 	if page == "settings" then ns.Settings:Refresh() end
 	self:Refresh()
@@ -598,6 +602,22 @@ function M:Send(textOverride)
 	self:Refresh()
 end
 
+-- The open agent's latest reply (or its latest message) in the copy box.
+function M:CopyLatest()
+	local v = ns.Store:View()
+	local msgs = self.mode ~= "new" and v and v.msgs or {}
+	local pick
+	for i = #msgs, 1, -1 do
+		if msgs[i].r == "a" then pick = msgs[i] break end
+	end
+	pick = pick or msgs[#msgs]
+	if not pick then
+		ns.Print("Open an agent with a reply first, then copy it.")
+		return
+	end
+	UI.ShowCopy(pick.t)
+end
+
 ---------------------------------------------------------------------------
 -- Screenshots and reports
 
@@ -668,6 +688,68 @@ function M:ApplyScale()
 	local pref = ns.db.settings.windowScale or "auto"
 	local scale = SCALES[pref] or ((ns.Gamepad and ns.Gamepad:IsActive()) and 1.15 or 1)
 	self.frame:SetScale(scale)
+	self:ApplySize()
+end
+
+---------------------------------------------------------------------------
+-- Size and position
+
+-- The largest the window can be at its scale: the screen.
+function M:MaxSize()
+	local scale = self.frame:GetScale()
+	return math.floor(UIParent:GetWidth() / scale), math.floor(UIParent:GetHeight() / scale)
+end
+
+-- The saved size, kept between the default (the smallest the layout fits) and the screen.
+function M:ApplySize()
+	local s = ns.db.settings.windowSize
+	local maxW, maxH = self:MaxSize()
+	local w = math.max(WIDTH, math.min(s and tonumber(s[1]) or WIDTH, maxW))
+	local h = math.max(HEIGHT, math.min(s and tonumber(s[2]) or HEIGHT, maxH))
+	self.frame:SetSize(w, h)
+end
+
+function M:SaveGeometry()
+	local f = self.frame
+	local point, _, rel, x, y = f:GetPoint()
+	ns.db.settings.windowPoint = { point, rel, x, y }
+	local w, h = f:GetWidth(), f:GetHeight()
+	if math.abs(w - WIDTH) < 1 and math.abs(h - HEIGHT) < 1 then
+		ns.db.settings.windowSize = nil
+	else
+		ns.db.settings.windowSize = { math.floor(w + 0.5), math.floor(h + 0.5) }
+	end
+end
+
+-- Drag the bottom-right corner to resize; right-click it for the default size.
+function M:CreateResizeGrip(f)
+	f:SetResizable(true)
+	local grip = CreateFrame("Button", nil, f)
+	grip:SetSize(20, 20)
+	grip:SetPoint("BOTTOMRIGHT", -3, 3)
+	grip:SetFrameLevel(f:GetFrameLevel() + 20)
+	grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+	grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+	grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+	grip:RegisterForClicks("RightButtonUp")
+	grip:SetScript("OnMouseDown", function(_, button)
+		if button ~= "LeftButton" then return end
+		local maxW, maxH = M:MaxSize()
+		f:SetResizeBounds(WIDTH, HEIGHT, math.max(WIDTH, maxW), math.max(HEIGHT, maxH))
+		f:StartSizing("BOTTOMRIGHT")
+	end)
+	grip:SetScript("OnMouseUp", function(_, button)
+		if button ~= "LeftButton" then return end
+		f:StopMovingOrSizing()
+		M:SaveGeometry()
+	end)
+	grip:SetScript("OnClick", function()
+		ns.db.settings.windowSize = nil
+		M:ApplySize()
+		PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF)
+	end)
+	UI.Tooltip(grip, "Resize", "Drag to make the window bigger. Right-click to go back to the default size.")
+	f.ResizeGrip = grip
 end
 
 function M:ToggleDictation()

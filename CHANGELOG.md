@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Copy text: the copy button in the bottom bar copies the agent's latest reply, and each message has its own next to its time. The game doesn't let addons use the clipboard, so it opens the text already selected in a box: press Ctrl+C.
+- Drag the window's bottom-right corner to make it bigger; right-click the corner for the default size. The size is remembered. The Settings option that made the whole window larger is now called "Window scale".
+
 ## 0.4.1
 
 - The addon says once per session, and `/orca selftest` shows, when the bridge on your computer is a different version, with where to get the matching one.
