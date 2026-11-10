@@ -99,6 +99,20 @@ function schtasks(args, { warn = true } = {}) {
   return r.status === 0;
 }
 
+// `schtasks /End` only ends conhost: the script and the bridge it started live on, so an
+// update kept running the old bridge (and a second one could start beside it). End
+// every cmd.exe running our script, with its whole tree.
+function endScript(script) {
+  const ps = path.join(SYSTEM32, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const command = "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'cmd.exe' -and $_.CommandLine -and $_.CommandLine.Contains($env:ORCAWOW_TASK_SCRIPT) } | ForEach-Object { taskkill.exe /PID $_.ProcessId /T /F | Out-Null }";
+  spawnSync(ps, ['-NoProfile', '-NonInteractive', '-Command', command], {
+    env: { ...process.env, ORCAWOW_TASK_SCRIPT: script },
+    windowsHide: true,
+    stdio: 'ignore',
+    timeout: 20000,
+  });
+}
+
 // Same shape as the systemd and launchd helpers in bin/orca-wow.js.
 export function windowsStartup(bridgeCommand) {
   return {
@@ -112,16 +126,20 @@ export function windowsStartup(bridgeCommand) {
       const body = taskXml(this.script);
       // schtasks /XML wants UTF-16 with a byte order mark.
       fs.writeFileSync(this.file, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(body, 'utf16le')]));
-      schtasks(['/End', '/TN', TASK], { warn: false });
+      this.stop();
       if (!schtasks(['/Create', '/TN', TASK, '/XML', this.file, '/F'])) return false;
       return schtasks(['/Run', '/TN', TASK]);
     },
-    restart() {
+    stop() {
       schtasks(['/End', '/TN', TASK], { warn: false });
+      endScript(this.script);
+    },
+    restart() {
+      this.stop();
       schtasks(['/Run', '/TN', TASK]);
     },
     remove() {
-      schtasks(['/End', '/TN', TASK], { warn: false });
+      this.stop();
       schtasks(['/Delete', '/TN', TASK, '/F'], { warn: false });
       fs.rmSync(this.file, { force: true });
       fs.rmSync(this.script, { force: true });
