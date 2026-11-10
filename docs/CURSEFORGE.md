@@ -15,7 +15,7 @@ What keeps the two in step:
    - **Summary:** See and control your Orca coding agents from inside the game.
    - **Category:** whichever of CurseForge's comes closest (Miscellaneous if none does).
    - **License:** MIT. **Source:** https://github.com/Lutacon/orca-wow
-   - **Avatar:** the Orca logo is under Orca's MIT license, but the name and logo belong to Stably. Ask Stably before using it as the project's avatar, or use an image of your own.
+   - **Logo:** [media/curseforge-logo.png](media/curseforge-logo.png), a terminal prompt drawn for this project. CurseForge doesn't accept trademarked images there, so not Orca's logo (the name and logo belong to Stably).
    - **Description:** the text below.
 2. **Wait for approval.** CurseForge reviews new projects before they're listed.
 3. **Make an API token** in your CurseForge account settings (API tokens).
