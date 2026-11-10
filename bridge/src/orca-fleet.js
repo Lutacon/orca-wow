@@ -179,8 +179,10 @@ export class OrcaFleet extends EventEmitter {
   }
 
   get config() {
-    const live = this.envs.find((e) => e.client.state === 'connected') || this.envs[0];
-    const label = this.envs.length === 1 && !this.envs[0].local ? this.envs[0].label : 'Orca';
+    const connected = this.envs.filter((e) => e.client.state === 'connected');
+    const live = connected[0] || this.envs[0];
+    // The machines the game is showing ("Orca on MacBook"); none while nothing is connected.
+    const label = connected.map((e) => (e.local ? 'this PC' : e.label)).join(', ') || undefined;
     return { environment: { label, serverVersion: live?.client.config?.environment?.serverVersion }, providers: [] };
   }
 

@@ -360,7 +360,7 @@ test('only remotes: an unreachable one is the error the game shows', async (t) =
   assert.equal(fleet.state, 'offline');
   assert.match(fleet.error, /Can't reach Orca on MacBook/);
   assert.match(fleet.error, /Studio's pairing is missing/);
-  assert.equal(fleet.config.environment.label, 'Orca');
+  assert.equal(fleet.config.environment.label, undefined, 'no connected machine to name');
   await assert.rejects(fleet.sendMessage('plain-id', 'x'), /gone/, 'no local Orca to route an unprefixed id to');
 });
 
