@@ -12,7 +12,7 @@ body:
     attributes:
       label: Versions
       description: Windows (`winver`), Orca (its About screen, on every computer involved), orca-wow (`orca-wow status`), and your controller if it's involved.
-      placeholder: e.g. Windows 11 24H2, Orca 1.4.255 (PC) and 1.4.255 (MacBook), orca-wow 0.3.0, Xbox Series controller
+      placeholder: e.g. Windows 11 24H2, Orca 1.4.255 (PC) and 1.4.255 (MacBook), orca-wow 0.4.0, Xbox Series controller
     validations:
       required: true
 

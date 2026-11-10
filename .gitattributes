@@ -1,0 +1,8 @@
+# Left out of the release zip (git archive): development files the install doesn't use.
+.github export-ignore
+.gitattributes export-ignore
+.gitignore export-ignore
+tools export-ignore
+bridge/test export-ignore
+AGENTS.md export-ignore
+CONTRIBUTING.md export-ignore

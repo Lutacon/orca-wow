@@ -1,0 +1,56 @@
+# Pushing a tag like v0.4.0 runs the bridge tests, then publishes a GitHub release with
+# orca-wow-v0.4.0.zip (the repository without its development files, see
+# .gitattributes) and that version's section of CHANGELOG.md as its notes.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Lua for the crypto and addon tests
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.1 luajit
+
+      - name: Bridge tests
+        working-directory: bridge
+        run: node --test test/*.test.js
+
+      - name: Addon smoke test
+        run: luajit tools/smoke.lua addon/OrcaWow tools/fixture_snapshot.lua
+
+      - name: Check the version matches the tag
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          grep -q "\"version\": \"$v\"" bridge/package.json
+          grep -q "^## Version: $v" addon/OrcaWow/OrcaWow.toc
+          grep -q "VERSION = '$v'" bridge/src/bridge.js
+          tr -d '\r' < CHANGELOG.md | grep -q "^## $v\$"
+
+      - name: Build the zip
+        run: |
+          name="orca-wow-${GITHUB_REF_NAME}"
+          git archive --format=zip --prefix="$name/" -o "$name.zip" "$GITHUB_REF_NAME"
+          unzip -l "$name.zip" | tail -n 1
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          tr -d '\r' < CHANGELOG.md | awk -v v="$v" '/^## /{p = ($2 == v); next} p' > notes.md
+          test -s notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "orca-wow-${GITHUB_REF_NAME}.zip" --title "$GITHUB_REF_NAME" --notes-file notes.md

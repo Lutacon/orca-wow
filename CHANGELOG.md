@@ -1,0 +1,32 @@
+# Changelog
+
+## 0.4.0
+
+The first release of this fork. It starts from [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow) 0.3.0, which showed T3 Code threads on Linux and macOS, and turns it into an addon for Orca on Windows.
+
+### Orca
+
+- See your Orca agents in game, grouped by state, with each one's last prompt, last reply and the end of its terminal.
+- Message an agent, stop it, and answer its permission prompts and multiple-choice questions. Yes and the agent's own "don't ask again" row are shown word for word.
+- Start a new worktree with the agent, worktree name and base branch you pick. Mark a worktree done or put it to sleep.
+- Orcas on other computers (a MacBook, say) through an Orca access link, over Orca's end-to-end encrypted connection, alongside or instead of this PC's Orca. `orca-wow remote add`, `remote list`, `remote remove` and `local on|off`.
+- The T3 Code backend, its model picker and its usage meters are gone.
+
+### Windows
+
+- `install.ps1` installs the bridge and the addon and registers the bridge as a hidden task that starts when you sign in.
+- A small capture helper, built with the C# compiler that ships with Windows, reads the game's corner even when another window covers it.
+- The addon's folders in the game are locked to your Windows account, and the bridge refuses to start if another account changed them.
+
+### Safety
+
+- Approvals and answers are bound to the menu the player saw; nothing is pressed if it changed.
+- Workspace-trust and hooks-review prompts can only be declined from the game.
+- Messages from the game that start with `!` (shell commands) are refused unless you run `orca-wow shell on`.
+- Remote Orcas that have used Orca's current encryption never fall back to the older one.
+
+### Look
+
+- Orca's logo for the minimap button, the window and the addon list. The 1200 data slots carry it too, with a title that says to leave them enabled.
+
+Tested on one Windows 11 PC with an Orca on a MacBook. Not tested yet: Linux and macOS (they come from the original project), controller navigation, and answering approvals in game for every agent Orca runs. Reports are welcome.

@@ -21,8 +21,8 @@ You need Windows 10 or 11 and **World of Warcraft: Forever** installed from Batt
 
 1. **Install Node.js 22 or newer.** In a terminal: `winget install OpenJS.NodeJS.LTS`. Nothing else is needed: the screen capture helper is compiled with the C# compiler that ships with Windows.
 2. **Install [Orca](https://github.com/stablyai/orca) and open it**, on this PC or on another computer on your network (for that, also follow "Orca on another computer" below). Add a repository in Orca and start an agent, so there's something to see in game.
-3. **Get this repository**, either with `git clone https://github.com/Lutacon/orca-wow.git` or with **Code → Download ZIP** on GitHub, then extract it.
-4. **Close the game** and run the installer from the repository's folder, in your own terminal:
+3. **Download the latest `orca-wow-v….zip`** from [Releases](https://github.com/Lutacon/orca-wow/releases/latest) and extract it.
+4. **Close the game** and run the installer from the extracted folder, in your own terminal:
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\install.ps1
    ```
@@ -50,7 +50,7 @@ The bridge then starts by itself each time you sign in to Windows, so from now o
 
 Options: `--wow "D:\Games\World of Warcraft"`, `--slots N` and `--no-service` (then start the bridge yourself with `orca-wow run`).
 
-**Update:** get the latest version of the repository (`git pull`, or download it again) and run `install.ps1` again. If only the addon's code changed, `/reload` in game is enough. If there are new folders or sounds, restart the game.
+**Update:** download the new release (or `git pull` in a clone) and run its `install.ps1`. What changed in each version is in [CHANGELOG.md](CHANGELOG.md). If only the addon's code changed, `/reload` in game is enough. If there are new folders or sounds, restart the game.
 
 **Uninstall:** `orca-wow uninstall`.
 

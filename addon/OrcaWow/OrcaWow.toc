@@ -2,7 +2,7 @@
 ## Title: Orca
 ## Notes: Watch and run your Orca coding agents from inside the game. Needs Orca and the orca-wow bridge running on this computer.
 ## Author: Lutacon, Ryan Hughes
-## Version: 0.3.0
+## Version: 0.4.0
 ## X-License: MIT
 ## X-Website: https://github.com/Lutacon/orca-wow
 ## IconTexture: Interface\AddOns\OrcaWow\Media\icon
