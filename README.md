@@ -101,6 +101,7 @@ Los detalles del enlace con el juego están en [docs/ARCHITECTURE.md](docs/ARCHI
 
 - [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow) (MIT, © 2026 Ryan Hughes): el addon, el enlace por franja, slots y campanas, y el bridge del que parte este fork.
 - [DSilence/t3wow](https://github.com/DSilence/t3wow): referencia para Windows.
+- El logo de los iconos es el de [Orca](https://github.com/stablyai/orca) (MIT, `resources/logo.svg`). `tools/make-icons.mjs` genera los iconos a partir de él.
 - [wow-ai](https://github.com/chelinho139/wow-ai) y [wow-forever-codex](https://github.com/0xinuarashi/wow-forever-codex), cuyas mediciones del cliente Forever sostienen la técnica de franja y slots.
 
 ## Licencia
