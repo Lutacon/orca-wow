@@ -11,6 +11,11 @@ $ErrorActionPreference = 'Stop'
 
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
+  # A terminal opened before Node was installed still has the old PATH: read the current one.
+  $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+  $node = Get-Command node -ErrorAction SilentlyContinue
+}
+if (-not $node) {
   Write-Host 'Orca for World of Warcraft needs Node.js 22 or newer: winget install OpenJS.NodeJS.LTS' -ForegroundColor Red
   exit 1
 }
