@@ -1,7 +1,7 @@
 #!/bin/bash
 # Install or update Orca for World of Warcraft.
 #
-#   curl -fsSL https://raw.githubusercontent.com/ryanrhughes/orca-wow/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Lutacon/orca-wow/main/install.sh | bash
 #
 # Run the same command again to update. From a clone, ./install.sh installs that copy.
 # Options (after `bash -s --` when piping): --wow "/path/to/World of Warcraft" --slots N --no-service
@@ -12,7 +12,7 @@
 # first launch.
 set -euo pipefail
 
-repo="ryanrhughes/orca-wow"
+repo="Lutacon/orca-wow"
 ref="${ORCA_WOW_REF:-main}"
 dest="${XDG_DATA_HOME:-$HOME/.local/share}/orca-wow"
 bin="$HOME/.local/bin"

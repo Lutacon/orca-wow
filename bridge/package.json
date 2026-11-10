@@ -1,17 +1,18 @@
 {
   "name": "orca-wow",
   "version": "0.3.0",
-  "description": "Bridge between the T3 Code addon for World of Warcraft: Forever and a running T3 Code server. Early release, experimental.",
-  "homepage": "https://github.com/ryanrhughes/t3code-wow",
+  "description": "Bridge between the OrcaWow addon for World of Warcraft: Forever and Orca's coding agents (or a T3 Code server). Experimental.",
+  "homepage": "https://github.com/Lutacon/orca-wow",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ryanrhughes/t3code-wow.git",
+    "url": "git+https://github.com/Lutacon/orca-wow.git",
     "directory": "bridge"
   },
   "bugs": {
-    "url": "https://github.com/ryanrhughes/t3code-wow/issues"
+    "url": "https://github.com/Lutacon/orca-wow/issues"
   },
-  "author": "Ryan Hughes",
+  "author": "Lutacon",
+  "contributors": ["Ryan Hughes (t3code-wow, which this is forked from)"],
   "type": "module",
   "private": true,
   "bin": {

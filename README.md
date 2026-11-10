@@ -1,109 +1,134 @@
 # Orca for World of Warcraft
 
-Mira y maneja los agentes de [Orca](https://github.com/stablyai/orca) (Claude Code, Codex… cada uno en su worktree) sin salir de **World of Warcraft: Forever**, en Windows.
+See and control your [Orca](https://github.com/stablyai/orca) agents (Claude Code, Codex and others, each in its own git worktree) without leaving **World of Warcraft: Forever**, on Windows.
 
-Fork de [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow), que hacía lo mismo con T3 Code en Linux y macOS. Este fork añade Windows y un backend para Orca. El de T3 sigue disponible con `"backend": "t3"`. El plan de trabajo y su estado están en [PLAN.md](PLAN.md).
+This is a fork of [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow), which does the same for T3 Code on Linux and macOS. This fork adds Windows and an Orca backend. The upstream Linux and macOS support is kept, and the T3 Code backend is still available with `"backend": "t3"` in the bridge's config. The work plan and its status are in [PLAN.md](PLAN.md).
 
-> Experimental. Las APIs que usa de Orca (la named pipe local) son internas y pueden cambiar entre versiones.
+> Experimental. The Orca APIs it uses (the local named pipe, and the encrypted WebSocket for other computers) are internal to Orca and can change between versions.
 
-## Qué hace
+## What it does
 
-- Una ventana en el juego (`/orca`) con tus agentes de Orca agrupados por estado: trabajando, te necesitan o terminados. Cada uno muestra su último prompt, su última respuesta y el final de su terminal.
-- **Escribirle** a un agente, **pararlo** (Esc) y **responder sus permisos**: Sí, "Sí, no volver a preguntar" o No. También responder a sus preguntas de opciones.
-- **Abrir un worktree nuevo** en cualquier repo de Orca, eligiendo el agente (Claude, Codex, OpenCode…), el nombre del worktree y la rama base, con tu prompt. **Marcar como hecho** o **dormir** su worktree.
-- **Varios Orca a la vez**: el de este PC y los de otros ordenadores de tu red, como un MacBook. Ver más abajo.
-- Avisos cuando un agente termina o pide algo: toast, sonido, línea en el chat y una sección en el tracker de objetivos. Se aplazan en combate.
-- Lectura en voz alta con la voz de Windows. Mando compatible.
+- A window in the game (`/orca`) with your Orca agents grouped by state: working, waiting for you, or done. Each one shows its last prompt, its last reply and the end of its terminal.
+- **Message** an agent, **stop** it (Esc) and **answer its permission prompts**: Yes, No, or the agent's own "don't ask again" option, word for word, when its menu has one. You can also answer its multiple-choice questions.
+- **Start a new worktree** in any Orca repo, picking the agent (Claude, Codex, OpenCode and others), the worktree name and the base branch, with your prompt. **Mark as done** or **sleep** its worktree.
+- **Several Orcas at once**: the one on this PC and those on other computers on your network, such as a MacBook. See "Orca on another computer" below.
+- Notices when an agent finishes or asks for something: a toast, a sound, a line in chat and a section in the objective tracker. They wait until you leave combat.
+- Replies read aloud with the Windows voice. Controller support.
 
-## Requisitos
+## Requirements
 
-- Windows 10/11 con **World of Warcraft: Forever** instalado desde Battle.net. Funciona en ventana o en pantalla completa sin bordes.
-- **Orca** abierto en este ordenador o en otro de tu red (ver "Orca en otro ordenador").
-- **Node.js 22+**: `winget install OpenJS.NodeJS.LTS`.
-- Nada más. El ayudante de captura se compila con el compilador de C# que ya trae Windows (.NET Framework 4).
+- Windows 10 or 11 with **World of Warcraft: Forever** installed from Battle.net. Windowed and borderless fullscreen both work.
+- **Orca** open on this computer or on another one on your network (see "Orca on another computer").
+- **Node.js 22 or newer**: `winget install OpenJS.NodeJS.LTS`.
+- Nothing else. The capture helper is compiled with the C# compiler that ships with Windows (.NET Framework 4).
 
-## Instalar
+On Linux and macOS, install from a checkout with `./install.sh`, as upstream does. This fork has only been tested on Windows.
 
-Con el juego **cerrado**, desde una copia del repo, en una terminal tuya (no hace falta ser administrador):
+## Install
 
-```bash
+With the game **closed**, from a copy of the repository, in your own terminal (you don't need to be an administrator):
+
+```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-El instalador hace esto:
+The installer:
 
-1. Copia el bridge y el addon a `%LOCALAPPDATA%\orca-wow\app`.
-2. Instala el addon y sus 1200 carpetas de actualización (`OrcaWow_S###`) en `_forever_\Interface\AddOns`.
-3. Registra el bridge como tarea al iniciar sesión, sin ventana y reiniciándolo si falla. Su log va a `%LOCALAPPDATA%\orca-wow\state\bridge.log`.
-4. Espera a que entres al juego.
+1. Copies the bridge and the addon to `%LOCALAPPDATA%\orca-wow\app`, and creates the `orca-wow` command at `%LOCALAPPDATA%\orca-wow\orca-wow.cmd`.
+2. Installs the addon and its 1200 update folders (`OrcaWow_S###`) in `_forever_\Interface\AddOns`.
+3. Restricts the addon's folders (`OrcaWow` and every `OrcaWow_S###`) to your Windows account, plus SYSTEM and Administrators. Blizzard's installer lets every user on the PC write to the game's AddOns folder, so another account could otherwise change the addon's code. If a folder above them is still writable by other accounts, the installer says which one. The bridge checks the addon's folders again each time it starts, and won't start if another account changed them: run `install.ps1` again to replace them.
+4. Registers the bridge as a task that starts when you sign in, with no window, and restarts it if it fails. Its log goes to `%LOCALAPPDATA%\orca-wow\state\bridge.log`.
+5. Waits for you to enter the game.
 
-Opciones: `--wow "D:\Juegos\World of Warcraft"`, `--slots N` y `--no-service` (en ese caso lo arrancas tú con `orca-wow run`).
+Options: `--wow "D:\Games\World of Warcraft"`, `--slots N` and `--no-service` (then start the bridge yourself with `orca-wow run`).
 
-**Actualizar:** vuelve a ejecutar `install.ps1`. Si solo ha cambiado el código del addon, basta con `/reload`. Si hay carpetas o sonidos nuevos, hay que reiniciar el juego.
+In the commands below, `orca-wow` stands for `%LOCALAPPDATA%\orca-wow\orca-wow.cmd`. Add `%LOCALAPPDATA%\orca-wow` to your PATH to type just `orca-wow`.
 
-**Desinstalar:** `%LOCALAPPDATA%\orca-wow\orca-wow.cmd uninstall`.
+**Update:** run `install.ps1` again. If only the addon's code changed, `/reload` in game is enough. If there are new folders or sounds, restart the game.
 
-## Orca en otro ordenador (p. ej. un MacBook)
+**Uninstall:** `orca-wow uninstall`.
 
-El bridge puede mostrar los agentes de uno o varios Orca de otros ordenadores de tu red (o de tu Tailscale), además del Orca de este PC o en lugar de él. Usa el mismo canal cifrado de extremo a extremo que la app móvil de Orca.
+## Orca on another computer (for example a MacBook)
 
-1. En el Mac, en Orca, ve a **Settings → Remote Orca Servers → Advertise this app as a server → New Link**. En **Connection address** elige la IP de red local del Mac (no `127.0.0.1`) y pulsa **Generate Access Link**. Copia el enlace `orca://pair?code=…` que aparece en "Pair another Orca client".
-   - Alternativa desde la terminal del Mac: `orca pair --address <ip-del-mac>`. Hace falta un enlace de **escritorio**: los de móvil (`--mobile`) no sirven.
-2. En el PC:
-   ```bash
-   %LOCALAPPDATA%\orca-wow\orca-wow.cmd remote add MacBook "orca://pair?code=..."
+The bridge can show the agents of one or more Orcas on other computers on your network (or your Tailscale network), alongside this PC's Orca or instead of it. It uses the same end-to-end encrypted connection as Orca's mobile app.
+
+1. On the Mac, in Orca, go to **Settings → Remote Orca Servers → Advertise this app as a server → New Link**. Under **Connection address**, pick the Mac's local network IP (not `127.0.0.1`) and click **Generate Access Link**. Copy the `orca://pair?code=…` link shown under "Pair another Orca client".
+   - Or, in a terminal on the Mac: `orca pair --address <the Mac's IP>`. It has to be a **desktop** link: mobile links (`--mobile`) don't work.
+2. On the PC, run this and paste the link when it asks. The link stays hidden while you paste it:
+   ```powershell
+   & "$env:LOCALAPPDATA\orca-wow\orca-wow.cmd" remote add MacBook
    ```
-   Comprueba la conexión antes de guardarla y reinicia el bridge.
-3. Si el Mac tiene el cortafuegos activado, permite que Orca acepte conexiones entrantes. Por defecto usa el puerto 6768.
+   Or pipe it in from the clipboard:
+   ```powershell
+   Get-Clipboard | & "$env:LOCALAPPDATA\orca-wow\orca-wow.cmd" remote add MacBook
+   ```
+   In Command Prompt, the first one is `%LOCALAPPDATA%\orca-wow\orca-wow.cmd remote add MacBook`. The command checks the connection before saving it, then restarts the bridge.
 
-Otros comandos:
-- `orca-wow remote list` muestra los Orca remotos y si responden.
-- `orca-wow remote remove MacBook` quita uno. Para revocar el acceso en el Mac, usa Settings → Remote Orca Servers → Shared Server Access.
-- `orca-wow local off` deja de mostrar el Orca de este PC.
+   Don't put the link on the command line: your shell keeps it in its history file, where anything that can read your files can use it. It still works, but the command warns you and tells you how to remove it from the history.
+3. If the Mac's firewall is on, allow Orca to accept incoming connections. By default it uses port 6768.
 
-En el juego, los agentes de cada ordenador llevan su nombre y se pueden filtrar por ordenador. Los secretos del enlace (token del dispositivo y clave del Mac) se guardan aparte, en `%LOCALAPPDATA%\orca-wow\config\remotes\`, nunca en `config.json` ni en los logs.
+Encryption: the bridge uses Orca's current encryption (E2EE v2). Older Orca versions only speak an older one, which doesn't stop someone on the network from replaying commands. A new pairing only accepts the older encryption if you add `--allow-legacy` to `remote add`; use it only for an old Orca on a network you trust, and update Orca there when you can. Once a computer has connected with E2EE v2, the bridge never falls back to the older encryption for that pairing.
 
-## Usarlo
+Other commands:
+- `orca-wow remote list` shows the other computers' Orcas and whether they answer.
+- `orca-wow remote remove MacBook` removes one from this PC. Its access link keeps working until you revoke it on the other computer: in its Orca, **Settings → Remote Orca Servers → Shared Server Access**.
+- `orca-wow local off` stops showing this PC's Orca (`orca-wow local on` shows it again).
 
-| En el juego | |
+In game, each computer's agents carry its name, and you can filter by computer. The secrets from the link (the device token and the Mac's key) are kept separately, in `%LOCALAPPDATA%\orca-wow\config\remotes\`, never in `config.json` or in the logs.
+
+## Using it
+
+| In game | |
 |---|---|
-| `/orca` | abrir o cerrar la ventana (también con el botón del minimapa) |
-| `/orca new <texto>` | lanzar un agente nuevo (opciones: `--agent codex --name mi-rama --base develop`) |
-| `/orca selftest` | comprobar el enlace paso a paso, con el tiempo de ida y vuelta |
-| `/orca status` | estado del bridge y de Orca |
+| `/orca` | open or close the window (or click the minimap button) |
+| `/orca new <text>` | start a new agent (options: `--agent codex --name my-branch --base develop`) |
+| `/orca selftest` | check the link step by step, with the round-trip time |
+| `/orca status` | the state of the bridge and of Orca |
 
-| En el ordenador | |
+| On the computer | |
 |---|---|
-| `orca-wow status [--log]` | lo que ve el bridge (Orca, juego, captura, addon) |
-| `orca-wow probe` | captura la esquina del juego e intenta leer la franja |
-| `orca-wow run --verbose` | el bridge en primer plano |
+| `orca-wow status [--log]` | what the bridge sees (Orca, the game, capture, the addon) |
+| `orca-wow probe` | capture the corner of the game window and try to read the strip |
+| `orca-wow run --verbose` | run the bridge in the foreground |
+| `orca-wow shell on\|off` | let messages from the game that start with `!` reach the agents (off by default) |
 
-## Cómo funciona
+## What the game can't do
 
-Un addon de WoW no puede usar la red ni leer ficheros. El bridge hace de puente así:
+The game shares one Lua environment with every other addon you run, so the bridge treats what comes from the game with some care:
 
-- **Del juego al bridge:** el addon pinta una franja de celdas de color, cifrada, en la esquina superior izquierda. Un ayudante nativo (`bridge/native/wowhelper.cs`) la copia de la pantalla en unos 16 ms. Si otra ventana la tapa, usa `PrintWindow`.
-- **Del bridge al juego:** el bridge escribe los datos en addons *LoadOnDemand* (`OrcaWow_S###`) y el addon carga el siguiente cuando un archivo de sonido silencioso "suena".
-- **Del bridge a Orca:** usa la named pipe local de Orca (`%APPDATA%\orca\orca-runtime.json` da la ruta y el token). Consulta `worktree.ps` cada 2–6 s, lee los terminales con `terminal.read` y escribe en ellos con `terminal.send`, como hacen el CLI y la app móvil de Orca.
+- **Shell commands.** Claude Code runs a message that starts with `!` as a shell command, without asking. The bridge refuses those from the game. To allow them, run `orca-wow shell on` (it restarts the bridge); `orca-wow shell off` turns it off again. Messages that start with `/` (the agent's own commands, such as `/clear`) are sent as usual.
+- **Workspace trust and hooks review.** When an agent asks whether to trust a folder or to approve its hooks, accept at the computer. The game only shows one line of those prompts; you can still answer No from the game.
+- **Stale questions.** If the question on the agent's screen changed after the game showed it, an approval or answer from the game is refused and nothing is pressed. The game then shows the current question; answer again.
+- **Prompts without a yes.** When the bridge can't find a numbered menu with a row that says yes (some agents draw their own prompts), or the agent wants you to sign in or pick a model, the game says to answer at the computer and only offers No.
+- **Text from the game.** Control characters are removed before a message is typed, and the `!` rule applies to every line.
+- **Other addons.** This addon has no global variable that other addons can call, but that only stops casual use: every addon runs in the same Lua environment, and a malicious one could read the link's keys. It could then do what you can from the game, within the limits above. Only install addons you trust.
 
-Los detalles del enlace con el juego están en [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+## How it works
 
-## Limitaciones
+A WoW addon can't use the network or read files. The bridge connects them like this:
 
-- La ventana del juego tiene que estar en pantalla (no minimizada) para que el bridge lea la franja.
-- Hay 1200 actualizaciones por sesión de interfaz. Cuando se acaban, haz `/reload`.
-- Los mensajes van limitados a unos 2000 caracteres. El historial se reduce al último prompt, la última respuesta y el final del terminal.
-- Las preguntas y los menús de permisos se leen de la pantalla del terminal del agente. Los agentes en modo chat de Orca son solo de lectura.
-- "Marcar hecho", "Reabrir" y "Dormir" afectan al worktree entero.
-- El dictado por voz aún no está disponible en Windows.
+- **Game to bridge:** the addon draws an encrypted strip of colored cells in the top-left corner. A native helper (`bridge/native/wowhelper.cs`) copies it from the screen in about 16 ms. If another window covers it, the helper uses `PrintWindow`.
+- **Bridge to game:** the bridge writes the data into *LoadOnDemand* addons (`OrcaWow_S###`), and the addon loads the next one when a silent sound file "plays".
+- **Bridge to Orca:** it uses Orca's local named pipe (`%APPDATA%\orca\orca-runtime.json` gives the path and the token). It polls `worktree.ps` every 2 to 6 seconds, reads terminals with `terminal.read` and writes to them with `terminal.send`, as Orca's CLI and mobile app do. Orcas on other computers are reached over Orca's encrypted WebSocket, with the same requests.
 
-## Créditos
+The details of the link with the game are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-- [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow) (MIT, © 2026 Ryan Hughes): el addon, el enlace por franja, slots y campanas, y el bridge del que parte este fork.
-- [DSilence/t3wow](https://github.com/DSilence/t3wow): referencia para Windows.
-- El logo de los iconos es el de [Orca](https://github.com/stablyai/orca) (MIT, `resources/logo.svg`). `tools/make-icons.mjs` genera los iconos a partir de él.
-- [wow-ai](https://github.com/chelinho139/wow-ai) y [wow-forever-codex](https://github.com/0xinuarashi/wow-forever-codex), cuyas mediciones del cliente Forever sostienen la técnica de franja y slots.
+## Limitations
 
-## Licencia
+- The game window has to be on screen (not minimized) for the bridge to read the strip.
+- There are 1200 updates per UI session. When they run out, type `/reload`.
+- Messages are limited to about 2000 characters. The history is cut down to the last prompt, the last reply and the end of the terminal.
+- Questions and permission menus are read from the agent's terminal screen. Agents in Orca's chat mode are read-only.
+- "Mark as done", "Reopen" and "Sleep" apply to the whole worktree.
+- Voice dictation isn't available on Windows yet.
 
-[MIT](LICENSE). Proyecto de fans, sin relación con Blizzard Entertainment, Stably (Orca) ni T3. World of Warcraft es una marca de Blizzard Entertainment.
+## Credits
+
+- [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow) (MIT, © 2026 Ryan Hughes): the addon, the strip link, slots and bells, and the bridge this fork starts from.
+- [DSilence/t3wow](https://github.com/DSilence/t3wow): reference for Windows.
+- The icons use the [Orca](https://github.com/stablyai/orca) logo (MIT, `resources/logo.svg`). `tools/make-icons.mjs` generates the icons from it.
+- [wow-ai](https://github.com/chelinho139/wow-ai) and [wow-forever-codex](https://github.com/0xinuarashi/wow-forever-codex), whose measurements of the Forever client the strip and slot technique rests on.
+
+## License
+
+[MIT](LICENSE). A fan project, not affiliated with Blizzard Entertainment, Stably (Orca) or T3. World of Warcraft is a trademark of Blizzard Entertainment. Orca's name and logo belong to Stably and are used here only to identify the integration.

@@ -2,7 +2,9 @@
 
 Contributions are welcome. This is an early, experimental release, so bug reports from real use are just as valuable as code.
 
-The supported setup is **Omarchy 4.5.0**, **T3 Code Nightly** and **World of Warcraft: Forever** under Proton. macOS with the native client and CachyOS with KDE Plasma are also supported, with less testing. Changes that make other setups work are welcome, as long as they don't break those.
+This repository is [Lutacon/orca-wow](https://github.com/Lutacon/orca-wow), a fork of [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow) by Ryan Hughes, which built the addon, the strip link, the slots and bells, and the bridge this fork starts from. The fork adds Windows and the Orca backend.
+
+The tested setup is **Windows 10 or 11**, **Orca** (on the same PC, or on another computer through an access link) and **World of Warcraft: Forever** from Battle.net. Linux (Omarchy, CachyOS with KDE Plasma, the game under Proton), macOS and the T3 Code backend come from upstream and are kept, but aren't tested here. Changes that make other setups work are welcome, as long as they don't break Windows.
 
 ## Issues
 
@@ -10,9 +12,9 @@ Open an issue for a bug you can reproduce, or for a specific idea. Keep it detai
 
 For a bug, include:
 
-- **Versions**: Omarchy (`omarchy-version`) or macOS (`sw_vers`), T3 Code Nightly (`t3 --version`), orca-wow (`orca-wow status`), and your controller if it's involved.
+- **Versions**: Windows (`winver`), Orca (its About screen; on every computer involved), orca-wow (`orca-wow status`), and your controller if it's involved. On Linux or macOS, the OS version (`omarchy-version`, `sw_vers`) and, with the T3 Code backend, `t3 --version`.
 - **What you did, what you expected, what happened instead.** Steps to reproduce if you have them.
-- **`orca-wow status --log`** output, and the text from `/orca report` in game.
+- **`orca-wow status --log`** output, and the text from `/orca report` in game. Check it for paths and machine names you'd rather not share.
 - **A screenshot or short video** for anything you can see: a layout problem, a wrong state, a notice that didn't appear. It's often the fastest way to explain the problem.
 
 One problem per issue. If you're not sure it's a bug, say so and describe what you saw.
@@ -28,34 +30,39 @@ One problem per issue. If you're not sure it's a bug, say so and describe what y
 
 ## Development
 
-```bash
-git clone https://github.com/ryanrhughes/t3code-wow
-cd t3code-wow
-./install.sh                 # installs the addon and the bridge from your checkout
+On Windows, in PowerShell, with the game closed:
+
+```powershell
+git clone https://github.com/Lutacon/orca-wow
+cd orca-wow
+powershell -ExecutionPolicy Bypass -File .\install.ps1   # installs the addon and the bridge from your checkout
 ```
 
-After editing, run `./install.sh` from your checkout, then `/reload` in game. It copies your checkout over the installed copy, puts the addon into the game and restarts the bridge. (`orca-wow sync` only re-copies the *installed* addon, so it won't pick up your edits.) New files inside the addon load on `/reload`; new addon folders (such as live-update slots) need a full game restart.
+On Linux or macOS, run `./install.sh` from the checkout instead.
 
-Tests:
+After editing, run the installer from your checkout again, then `/reload` in game. It copies your checkout over the installed copy (`%LOCALAPPDATA%\orca-wow\app` on Windows), puts the addon into the game and restarts the bridge. (`orca-wow sync` only re-copies the *installed* addon, so it won't pick up your edits.) New files inside the addon load on `/reload`; new addon folders (such as live-update slots) need a full game restart. Don't link (junction) the game's `OrcaWow` folder to your checkout instead: on Windows the bridge refuses to start when it finds a link among OrcaWow's folders in the game. Run `install.ps1` from the checkout after each change.
 
-```bash
-cd bridge && npm test                                        # bridge, protocol, crypto, Lua/Node agreement
-node tools/snapshot.mjs /tmp/t3snap.lua                      # a real snapshot from your running T3 Code
-lua5.1 tools/smoke.lua addon/OrcaWow /tmp/t3snap.lua "$(cat /tmp/t3snap.view)"   # drive the addon headlessly
-luajit tools/smoke.lua addon/OrcaWow /tmp/t3snap.lua "$(cat /tmp/t3snap.view)"   # same, with signed bit ops
+Tests, from the repository folder:
+
+```powershell
+cd bridge; node --test; cd ..                                   # bridge, protocol, crypto, Lua/Node agreement
+luajit tools/smoke.lua addon/OrcaWow tools/fixture_snapshot.lua  # drive the addon headlessly
+lua5.1 tools/smoke.lua addon/OrcaWow tools/fixture_snapshot.lua  # same, with unsigned bit ops like WoW (where Lua 5.1 is installed)
 ```
 
-On macOS, Homebrew doesn't package Lua 5.1: `brew install luajit` covers the LuaJIT runs, and the `lua5.1` ones need Lua 5.1 built from source.
+The bridge tests need `lua5.1` or `luajit` on PATH for the Lua/Node agreement checks, and use whichever they find. On Windows, LuaJIT is the practical one (any build on PATH); on macOS, `brew install luajit`. Homebrew doesn't package Lua 5.1, so the `lua5.1` runs need it built from source.
+
+To drive the addon with your own agents instead of the fixture, `node tools/snapshot.mjs <out.lua>` writes a snapshot from your running Orca, and a `.view` file next to it naming the thread it shows; pass the snapshot to `tools/smoke.lua`, with the contents of the `.view` file as a third argument.
 
 `tools/wowstub.lua` stands in for the WoW API. Its widget methods come from the client's own API documentation, so calling a method that doesn't exist fails in tests the way it would in game.
 
-Before changing how the addon and bridge talk, read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [AGENTS.md](AGENTS.md): several things that look like workarounds are deliberate, measured limits of the game client.
+Before changing how the addon and bridge talk, read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [AGENTS.md](AGENTS.md): several things that look like workarounds are deliberate, measured limits of the game client, and AGENTS.md lists the security rules a change must keep.
 
 ## Style
 
-- Lua: tabs. JavaScript: two spaces, ES modules, no dependencies beyond Node itself.
+- Lua: tabs. JavaScript: two spaces, ES modules, no dependencies beyond Node itself (`bridge/vendor/tweetnacl` is vendored, not installed).
 - Text people see (in game, in the CLI, in docs) is plain and specific: say what happened and what to do, without jargon.
 
 ## Security
 
-If you find a security problem, such as a way to send commands to someone's agents or read what they're sending, please report it privately through [GitHub's security advisories](https://github.com/ryanrhughes/t3code-wow/security/advisories/new) rather than a public issue.
+If you find a security problem, such as a way to send commands to someone's agents or read what they're sending, please report it privately through [GitHub's security advisories](https://github.com/Lutacon/orca-wow/security/advisories/new) rather than a public issue. If it also affects upstream's code, say so; upstream is [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow).
