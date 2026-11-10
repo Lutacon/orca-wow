@@ -19,9 +19,11 @@ if (-not $node) {
   Write-Host 'Orca for World of Warcraft needs Node.js 22 or newer: winget install OpenJS.NodeJS.LTS' -ForegroundColor Red
   exit 1
 }
-$major = [int](& $node.Source -p 'process.versions.node.split(".")[0]')
+# Parse `node --version` here: Windows PowerShell drops the inner quotes of arguments to programs.
+$version = (& $node.Source --version).Trim()
+$major = [int]($version.TrimStart('v').Split('.')[0])
 if ($major -lt 22) {
-  Write-Host "Orca for World of Warcraft needs Node.js 22 or newer; found $(& $node.Source --version)." -ForegroundColor Red
+  Write-Host "Orca for World of Warcraft needs Node.js 22 or newer; found $version." -ForegroundColor Red
   exit 1
 }
 
