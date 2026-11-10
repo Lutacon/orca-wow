@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ReplyParser, bgraToRgb, WinHelper } from '../src/winhelper.js';
 import { taskArguments, taskScript, taskXml, NO_RESTART_EXIT } from '../src/winservice.js';
-import { atomicWrite, SlotBank } from '../src/slots.js';
+import { atomicWrite, writeBell, LONG_SILENT_WAV, SlotBank } from '../src/slots.js';
 
 const WIN = process.platform === 'win32';
 
@@ -52,6 +52,32 @@ test('a bell write waits out a file the game has open, and gives up cleanly', ()
     assert.throws(() => atomicWrite(file, 'again', { tries: 5, rename: busy(10) }), { code: 'EPERM' });
     assert.equal(fs.readFileSync(file, 'utf8'), 'rung');
     assert.deepEqual(fs.readdirSync(dir), ['03993.wav'], 'no temp file left behind');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Measured in game: the client can refuse a bell's rename for seconds while it polls it,
+// but lets it be written. A bell that can't be replaced is rewritten in place instead.
+test('a bell the game won\'t let go of is rewritten in place, never through a hard link', { skip: !WIN && 'Windows only' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orca-bell-'));
+  try {
+    const file = path.join(dir, '03992.wav');
+    fs.writeFileSync(file, '');
+    const never = () => {
+      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+    };
+    writeBell(file, LONG_SILENT_WAV, { rename: never });
+    assert.ok(fs.readFileSync(file).equals(LONG_SILENT_WAV), 'filled in place');
+    writeBell(file, '', { rename: never });
+    assert.equal(fs.statSync(file).size, 0, 'emptied in place');
+    assert.deepEqual(fs.readdirSync(dir), ['03992.wav'], 'no temp file left behind');
+    const other = path.join(dir, 'elsewhere.txt');
+    fs.writeFileSync(other, 'keep');
+    fs.rmSync(file);
+    fs.linkSync(other, file);
+    assert.throws(() => writeBell(file, LONG_SILENT_WAV, { rename: never }), { code: 'EPERM' });
+    assert.equal(fs.readFileSync(other, 'utf8'), 'keep');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

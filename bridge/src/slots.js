@@ -89,6 +89,35 @@ export function atomicWrite(file, content, { tries = RENAME_TRIES, rename = fs.r
   }
 }
 
+// Bells on Windows. The client keeps a bell it is polling open for seconds at a time
+// without letting it be replaced (measured: renames refused for ~4 s in a row), but it
+// does let it be written. So after a few quick rename tries the bell is rewritten in
+// place: the body first and the header last, so a half-written fill never looks like a
+// complete sound, then truncated to size. Only a plain file with a single link is
+// written in place (the Signals folder itself is pinned and owner-only on Windows).
+const BELL_RENAME_TRIES = 5;
+const BELL_RENAME_WAIT_MS = 10;
+
+export function writeBell(file, content, { rename = fs.renameSync } = {}) {
+  if (process.platform !== 'win32') return atomicWrite(file, content, { rename });
+  try {
+    return atomicWrite(file, content, { tries: BELL_RENAME_TRIES, rename });
+  } catch (err) {
+    if (!['EPERM', 'EACCES', 'EBUSY'].includes(err.code)) throw err;
+    const st = fs.lstatSync(file);
+    if (!st.isFile() || st.nlink !== 1) throw err;
+    const fd = fs.openSync(file, 'r+');
+    try {
+      const body = Buffer.from(content);
+      if (body.length > 44) fs.writeSync(fd, body, 44, body.length - 44, 44);
+      if (body.length) fs.writeSync(fd, body, 0, Math.min(44, body.length), 0);
+      fs.ftruncateSync(fd, body.length);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+}
+
 // The only names install ever prunes from Signals.
 const SIGNAL_FILE = /^\d{5}\.wav$/;
 // What atomicWrite leaves behind if the bridge dies between its write and its rename.
@@ -322,8 +351,8 @@ export class SlotBank {
   // (k .. k+3) only ever sees bells raised after it last loaded.
   raise(k) {
     this.checkSignals();
-    atomicWrite(this.bellFile(k), LONG_SILENT_WAV);
-    atomicWrite(this.bellFile(k - 4), '');
+    writeBell(this.bellFile(k), LONG_SILENT_WAV);
+    writeBell(this.bellFile(k - 4), '');
     return true;
   }
 
@@ -344,7 +373,7 @@ export class SlotBank {
     this.checkSignals();
     for (let i = 0; i < BELLS; i++) {
       try {
-        atomicWrite(this.sigFile(BELL_BASE + i), '');
+        writeBell(this.sigFile(BELL_BASE + i), '');
       } catch {}
     }
   }
