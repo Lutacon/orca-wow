@@ -34,9 +34,9 @@ function tempAddons(slots = 8) {
   return dir;
 }
 
-function fakeBridge(slots = 8) {
+function fakeBridge(slots = 8, { secureFolders = null } = {}) {
   const dir = tempAddons(slots);
-  const b = new Bridge({ addonsDir: dir, config: { slots, orca: { local: false } }, log: () => {}, stateDir: fs.mkdtempSync(path.join(os.tmpdir(), 'orca-wow-state-')) });
+  const b = new Bridge({ addonsDir: dir, config: { slots, orca: { local: false } }, log: () => {}, stateDir: fs.mkdtempSync(path.join(os.tmpdir(), 'orca-wow-state-')), secureFolders });
   b.proc = { pid: 1, startTicks: 1 };
   currentKeys = b.stripKeys;
   b.persist = { processKey: '1:1', sigCounter: 1, raised: [], handled: {}, slotGuess: 1, gen: 0 };
@@ -237,6 +237,38 @@ test('a slot folder replaced while the bridge runs stops publishing for good', (
   fs.mkdirSync(sig);
   assert.throws(() => other.b.bank.raise(1), { code: 'FOLDER_CHANGED' });
   assert.deepEqual(fs.readdirSync(sig), []);
+  other.b.stop();
+});
+
+// The CurseForge app and WowUp update an addon by replacing its folder, which takes the
+// bells in OrcaWow\Signals with it. One this account made is set up again, not a halt.
+test('an addon manager replacing the OrcaWow folder gets the bells put back, unless another account was involved', () => {
+  const replace = (dir) => {
+    const addon = path.join(dir, 'OrcaWow');
+    fs.rmSync(addon, { recursive: true });
+    fs.mkdirSync(addon);
+    fs.writeFileSync(path.join(addon, 'OrcaWow.toc'), '## Title: Orca\n');
+  };
+  const clean = { checked: 1, fixed: ['OrcaWow'], foreign: [], links: [], errors: [], open: [], noAcl: null, failed: null };
+  let checks = 0;
+  const { b, dir } = fakeBridge(8, { secureFolders: () => (checks++, clean) });
+  assert.ok(b.publishNow('test'));
+  replace(dir);
+  assert.equal(b.publishNow('test'), false, 'this publish found the folder replaced');
+  assert.equal(b.halted, null);
+  assert.equal(checks, 1, 'the new folder was checked and locked');
+  b.lastPublishAt = 0;
+  assert.ok(b.publishNow('test'), 'and the next one goes out');
+  const sig = path.join(dir, 'OrcaWow', 'Signals');
+  assert.equal(fs.readdirSync(sig).filter((f) => f.endsWith('.wav')).length, 10, '8 bells and the 2 self-test controls');
+  assert.ok(fs.existsSync(path.join(dir, 'OrcaWow', 'OrcaWow.toc')), 'the new addon files are left alone');
+  b.stop();
+
+  // A file another account put in it: stop, as before.
+  const other = fakeBridge(8, { secureFolders: () => ({ ...clean, foreign: ['OrcaWow\\Core\\Init.lua'] }) });
+  replace(other.dir);
+  assert.equal(other.b.publishNow('test'), false);
+  assert.match(other.b.halted, /OrcaWow was moved or replaced/);
   other.b.stop();
 });
 

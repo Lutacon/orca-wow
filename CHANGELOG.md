@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The addon says once per session, and `/orca selftest` shows, when the bridge on your computer is a different version, with where to get the matching one.
+- When an addon manager (the CurseForge app, WowUp) replaces the OrcaWow folder to update it, the bridge locks the new folder again and puts the update bells back, instead of stopping until you reinstall.
+- Releases can upload the addon to CurseForge as well (docs/CURSEFORGE.md).
+
 ## 0.4.0
 
 The first release of this fork. It starts from [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow) 0.3.0, which showed T3 Code threads on Linux and macOS, and turns it into an addon for Orca on Windows.

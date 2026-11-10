@@ -71,3 +71,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" "orca-wow-${GITHUB_REF_NAME}.zip" --title "$GITHUB_REF_NAME" --notes-file notes.md
+
+      # The addon alone (the OrcaWow folder) goes to CurseForge once the project exists:
+      # set the repository variable CF_PROJECT_ID and the secret CF_API_KEY (see
+      # docs/CURSEFORGE.md). Without them this step is skipped.
+      - name: Upload the addon to CurseForge
+        if: ${{ vars.CF_PROJECT_ID != '' }}
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_PROJECT_ID: ${{ vars.CF_PROJECT_ID }}
+        run: |
+          test -n "$CF_API_KEY" || { echo "CF_API_KEY isn't set"; exit 1; }
+          zipname="OrcaWow-${GITHUB_REF_NAME}.zip"
+          (cd addon && zip -qr "../$zipname" OrcaWow)
+          # The TOC's interface number names the game version: 16001 is 1.60.1.
+          iface=$(tr -d '\r' < addon/OrcaWow/OrcaWow.toc | sed -n 's/^## Interface: *\([0-9]*\).*/\1/p')
+          gv="$((iface / 10000)).$((iface / 100 % 100)).$((iface % 100))"
+          ids=$(curl -fsS -H "X-Api-Token: $CF_API_KEY" https://wow.curseforge.com/api/game/versions | jq -c --arg n "$gv" '[.[] | select(.name == $n) | .id]')
+          echo "game version $gv: $ids"
+          test "$(jq length <<< "$ids")" = 1 || { echo "expected exactly one CurseForge game version called $gv"; exit 1; }
+          meta=$(jq -n --rawfile notes notes.md --arg name "$GITHUB_REF_NAME" --argjson ids "$ids" '{changelog: $notes, changelogType: "markdown", displayName: $name, gameVersions: $ids, releaseType: "release"}')
+          curl -fsS -H "X-Api-Token: $CF_API_KEY" --form-string "metadata=$meta" -F "file=@$zipname" "https://wow.curseforge.com/api/projects/$CF_PROJECT_ID/upload-file"

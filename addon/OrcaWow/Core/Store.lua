@@ -28,6 +28,15 @@ function Store:Apply(data)
 	self.data, self.byId, self.projectsById = data, byId, projectsById
 	self.applied = self.applied + 1
 
+	-- The addon and the bridge ship together; an addon manager can update one without
+	-- the other, and the link between them changes between versions.
+	local theirs = data.bridge.version
+	if theirs and ns.version ~= "dev" and theirs ~= ns.version and not self.warnedVersion then
+		self.warnedVersion = true
+		ns.Print(ns.Color("red", string.format("This addon is version %s but the orca-wow bridge on your computer is %s.", ns.version, theirs))
+			.. " Download the matching release from " .. ns.RELEASES .. " and run its install.ps1.")
+	end
+
 	if self.applied > 1 then
 		for id, t in pairs(byId) do
 			local old = before[id]

@@ -14,6 +14,7 @@ local addonName, ns = ...
 ns.name = addonName
 ns.version = C_AddOns.GetAddOnMetadata(addonName, "Version") or "dev"
 ns.media = "Interface\\AddOns\\" .. addonName .. "\\Media\\"
+ns.RELEASES = "github.com/Lutacon/orca-wow/releases"
 
 ns.COLORS = {
 	gold = "ffffd100",

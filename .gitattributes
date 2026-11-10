@@ -6,3 +6,4 @@ tools export-ignore
 bridge/test export-ignore
 AGENTS.md export-ignore
 CONTRIBUTING.md export-ignore
+docs/CURSEFORGE.md export-ignore

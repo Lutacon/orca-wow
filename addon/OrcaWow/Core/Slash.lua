@@ -73,6 +73,10 @@ function ns.SelfTest()
 	local age = T.bridgeNow and (time() - T.bridgeNow) or nil
 	line(age ~= nil and age < 300, "bridge: " .. (b.version and ("orca-wow " .. b.version) or "not heard from") .. (age and string.format(", last update %ds ago", age) or ""),
 		"check `orca-wow status` on your desktop")
+	if b.version then
+		line(b.version == ns.version or ns.version == "dev", string.format("versions: addon %s, bridge %s", ns.version, b.version),
+			"install the matching release from " .. ns.RELEASES)
+	end
 	line(b.orca == "connected", "Orca on this computer: " .. tostring(b.orca), b.err or "open Orca on your computer")
 	for _, e in ipairs(b.envs or {}) do
 		if not e["local"] then line(e.state == "connected", "Orca on " .. e.label .. ": " .. tostring(e.state), "check that machine is on and reachable") end

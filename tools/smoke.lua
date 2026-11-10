@@ -149,6 +149,18 @@ ns.Transport:Apply(data)
 check(ns.Main.composer._text == "already pasted words", "text the backend already pasted isn't added again")
 ns.Main.composer._text = ""
 
+-- An addon manager updated the addon but not the bridge: say so once, with the fix.
+Stub.printed = {}
+local sameVersion = data.bridge.version
+data.bridge.version = "0.0.1"
+data.gen = data.gen + 1
+ns.Transport:Apply(data)
+check(Stub.printed[1] and Stub.printed[1]:find("bridge on your computer is 0.0.1", 1, true) and Stub.printed[1]:find("releases", 1, true), "a bridge of another version is pointed out: " .. tostring(Stub.printed[1]))
+data.gen = data.gen + 1
+ns.Transport:Apply(data)
+check(#Stub.printed == 1, "the version note isn't repeated")
+data.bridge.version = sameVersion
+
 -- A desktop with no dictation backend (macOS today): the mic says why and sends nothing.
 data.bridge.dictation = nil
 data.bridge.dictationHint = "Dictation isn't available on macOS yet."

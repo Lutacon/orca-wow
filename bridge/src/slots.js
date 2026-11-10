@@ -129,6 +129,7 @@ export class FolderChangedError extends Error {
     const again = process.platform === 'win32' ? 'run install.ps1 again' : 'run the install again';
     super(`${dir} was moved or replaced while the bridge was running (on a shared PC, another account may have done it), so the bridge stopped sending updates to the game. To fix it, ${again}, then restart the game.`);
     this.code = 'FOLDER_CHANGED';
+    this.dir = dir;
   }
 }
 
@@ -367,6 +368,30 @@ export class SlotBank {
       atomicWrite(long, LONG_SILENT_WAV);
     }
     atomicWrite(this.sigFile(CTL_EMPTY), '');
+  }
+
+  // Whether `dir` is the addon's own folder or its Signals folder (not a slot).
+  isAddonFolder(dir) {
+    return dir === path.join(this.addonsDir, ADDON) || dir === this.sigDir;
+  }
+
+  // An addon manager (the CurseForge app, WowUp) replaces the OrcaWow folder when it
+  // updates the addon, and the bells in Signals go with it. Put Signals and its files
+  // back into the folder that is there now, and pin that folder from here on. The caller
+  // checks first that the new folder is one an install would accept.
+  restoreSignals() {
+    const base = fs.realpathSync.native(this.addonsDir);
+    const addon = path.join(this.addonsDir, ADDON);
+    if (!checkFolder(this.addonsDir, addon, base)) throw new Error(`${addon} is gone`);
+    if (!checkFolder(this.addonsDir, this.sigDir, base)) {
+      fs.mkdirSync(this.sigDir);
+      checkFolder(this.addonsDir, this.sigDir, base);
+    }
+    for (const dir of [addon, this.sigDir]) this.pinned?.set(dir, folderId(dir));
+    for (let k = BELL_BASE; k < BELL_BASE + BELLS; k++) {
+      if (!fs.existsSync(this.sigFile(k))) atomicWrite(this.sigFile(k), '');
+    }
+    this.prepareBells();
   }
 
   // Bells are re-read on every play, so at a client restart we only need them empty.

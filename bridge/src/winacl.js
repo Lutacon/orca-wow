@@ -176,6 +176,17 @@ export function secureAddonFolders(addonsDir, { sid, full = false, parents = [] 
   return out;
 }
 
+// What a check found that the bridge must not work with: links, and anything another
+// account created or that couldn't be checked. Folders this account owns that only
+// needed their permissions locked again ("fixed") aren't problems.
+export function folderProblems(r) {
+  return [
+    ...r.links.map((p) => `${p} is a link to another place`),
+    ...r.foreign.map((p) => `${p} was created by another account on this PC`),
+    ...r.errors.map((e) => `${e.path}: ${e.detail}`),
+  ];
+}
+
 // The top-level OrcaWow folder each problem path belongs to (to replace it as a whole).
 export function topFolders(addonsDir, paths) {
   const tops = new Set();

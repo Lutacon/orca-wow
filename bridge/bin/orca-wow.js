@@ -13,7 +13,7 @@ import { StripCapture, SCREEN_PERMISSION_HELP } from '../src/capture.js';
 import { decodeImage } from '../src/codec.js';
 import { CONFIG_DIR, DATA_DIR, WINDOWS } from '../src/paths.js';
 import { windowsStartup, NO_RESTART_EXIT } from '../src/winservice.js';
-import { secureAddonFolders, topFolders } from '../src/winacl.js';
+import { secureAddonFolders, topFolders, folderProblems } from '../src/winacl.js';
 import { readRuntime as readOrcaRuntime } from '../src/orca.js';
 import { parseAccessLink, checkAccessLink, remoteIdFor, saveRemoteSecret, readRemoteSecret, removeRemoteSecret, remoteSecretFile, probeRemote, markRemoteV2, plainText } from '../src/orca-remote.js';
 
@@ -240,16 +240,6 @@ function syncAddon(addonsDir) {
     else atomicWrite(d, fs.readFileSync(s));
   }
   return dst;
-}
-
-// Windows (see winacl.js): what the check of OrcaWow's folders found that the bridge
-// must not work with.
-function folderProblems(r) {
-  return [
-    ...r.links.map((p) => `${p} is a link to another place`),
-    ...r.foreign.map((p) => `${p} was created by another account on this PC`),
-    ...r.errors.map((e) => `${e.path}: ${e.detail}`),
-  ];
 }
 
 // Before writing into the game: replace any OrcaWow folder another account created or

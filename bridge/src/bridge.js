@@ -17,6 +17,7 @@ import { StripCapture } from './capture.js';
 import { SlotBank } from './slots.js';
 import { threadStatus, isUnread } from './threads.js';
 import { OrcaFleet } from './orca-fleet.js';
+import { secureAddonFolders, folderProblems } from './winacl.js';
 import { Voice } from './voice.js';
 import { findWowProcess, processKey } from './wow.js';
 import { markdownToWow, markdownToSpeech, firstLine, escapeWow } from './format.js';
@@ -210,7 +211,7 @@ export function friendlyError(message) {
 }
 
 export class Bridge {
-  constructor({ addonsDir, config = {}, log = console.log, stateDir = STATE_DIR }) {
+  constructor({ addonsDir, config = {}, log = console.log, stateDir = STATE_DIR, secureFolders }) {
     this.addonsDir = addonsDir;
     this.config = config;
     this.log = (...a) => {
@@ -226,6 +227,8 @@ export class Bridge {
     // Every write checks it still goes into these folders (see SlotBank.pin).
     this.bank.pin();
     this.halted = null; // why publishing stopped for good (a folder was replaced)
+    // On Windows, checks and locks OrcaWow's folders to this account (winacl.js).
+    this.secureFolders = secureFolders !== undefined ? secureFolders : process.platform === 'win32' ? (dir) => secureAddonFolders(dir) : null;
     this.capture = new StripCapture({ log: this.log, backend: config.capture?.backend || 'auto', region: config.capture?.region || null });
     // This PC's Orca (unless `orca.local` is false) plus any paired with
     // `orca-wow remote add` (`orca.remotes`; their secrets live in CONFIG_DIR/remotes).
@@ -996,11 +999,16 @@ export class Bridge {
     }, delay);
   }
 
-  // A folder the bridge writes into was moved or replaced (FolderChangedError): stop
-  // writing into the game for good, and say so in the log and `orca-wow status`.
-  // Returns whether it halted.
+  // A folder the bridge writes into was moved or replaced (FolderChangedError). If it's
+  // the addon's own folder and an addon manager replaced it (see recoverAddonFolder),
+  // carry on; otherwise stop writing into the game for good, and say so in the log and
+  // `orca-wow status`. Returns whether it handled the error.
   halt(err) {
     if (err?.code !== 'FOLDER_CHANGED') return false;
+    if (!this.halted && this.recoverAddonFolder(err)) {
+      this.schedulePublish();
+      return true;
+    }
     if (!this.halted) {
       this.halted = err.message;
       clearTimeout(this.publishTimer);
@@ -1008,6 +1016,35 @@ export class Bridge {
       this.log(err.message);
       this.writeStatus();
     }
+    return true;
+  }
+
+  // The CurseForge app and WowUp replace the OrcaWow folder when they update the addon,
+  // taking the bells in Signals with it. A replacement made by this account, with
+  // nothing in it from another account, is what an install accepts too: lock it to this
+  // account again (on Windows), put the bells back and carry on. The slots aren't
+  // managed by anything else, so a replaced slot still stops the bridge. At most once a
+  // minute, so a folder that keeps changing still stops it.
+  recoverAddonFolder(err) {
+    if (!this.bank.isAddonFolder(err.dir)) return false;
+    if (Date.now() - (this.recoveredAt || 0) < 60000) return false;
+    this.recoveredAt = Date.now();
+    try {
+      if (this.secureFolders) {
+        const r = this.secureFolders(this.addonsDir);
+        const problems = folderProblems(r);
+        if (r.failed) problems.push(`couldn't check who else can change it (${r.failed})`);
+        if (problems.length) {
+          this.log(`OrcaWow's folder was replaced, and not only by this account: ${problems.join('; ')}`);
+          return false;
+        }
+      }
+      this.bank.restoreSignals();
+    } catch (e) {
+      this.log(`OrcaWow's folder was replaced and couldn't be set up again: ${e.message}`);
+      return false;
+    }
+    this.log('OrcaWow\'s folder was replaced (an addon manager updating it?): locked it to this account again and put the update bells back.');
     return true;
   }
 
