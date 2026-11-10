@@ -6,23 +6,23 @@ local Stub = dofile("tools/wowstub.lua")
 Stub.slotData.default = snapshot
 
 local function check(cond, msg)
-	if not cond then for _, e in ipairs(T3Code and T3Code.errors or {}) do print("RECORDED ERROR: " .. e.msg) end error("CHECK FAILED: " .. msg, 2) end
+	if not cond then for _, e in ipairs(OrcaWow and OrcaWow.errors or {}) do print("RECORDED ERROR: " .. e.msg) end error("CHECK FAILED: " .. msg, 2) end
 	print("ok - " .. msg)
 end
 
 -- Load files in TOC order.
 local ns = {}
-for line in io.lines(addonDir .. "/T3Code.toc") do
+for line in io.lines(addonDir .. "/OrcaWow.toc") do
 	line = line:gsub("\r", "")
 	if line ~= "" and not line:match("^#") and line:match("%.lua$") then
 		local path = addonDir .. "/" .. line:gsub("\\", "/")
 		local chunk = assert(loadfile(path))
-		chunk("T3Code", ns)
+		chunk("OrcaWow", ns)
 	end
 end
-check(T3Code == ns, "namespace exported")
+check(OrcaWow == ns, "namespace exported")
 
-Stub.Fire("ADDON_LOADED", "T3Code")
+Stub.Fire("ADDON_LOADED", "OrcaWow")
 check(ns.db and ns.db.session and #ns.db.session == 8, "saved variables initialised")
 Stub.Fire("PLAYER_LOGIN")
 check(ns.Transport.slotCount == 600, "found 600 slots by binary search")
@@ -30,7 +30,8 @@ check(ns.Store.applied == 1, "bootstrap slot applied")
 check(#ns.Store.data.threads > 0, "threads loaded: " .. #ns.Store.data.threads)
 check(ns.Transport.stripShown, "hello strip shown")
 check(ns.Transport:Encrypted(), "link keys loaded from the bootstrap slot")
-check(T3Code_Inbox == nil, "slot global cleared after loading")
+check(OrcaWow_Inbox == nil, "slot global cleared after loading")
+check(ns.Store:Backend() == "t3" and not ns.Store:IsOrca(), "a bridge that names no backend is taken as T3 Code: " .. ns.Store:Backend())
 do
 	local drawn = WOWSTUB.StripCells()
 	-- Header byte 3 (version) spans cells 6..8: bits 16..23 of the frame.
@@ -54,8 +55,8 @@ local sig = ns.db.sigNext
 -- Patch the snapshot's ack to this UI session.
 local chunk = assert(loadfile(snapshot))
 chunk()
-local data = T3Code_Inbox
-T3Code_Inbox = nil
+local data = OrcaWow_Inbox
+OrcaWow_Inbox = nil
 data.ack = { ui = ns.ui, seq = ns.Transport.stripSeq }
 data.gen = data.gen + 1
 data.nextSig = sig + 1
@@ -496,16 +497,16 @@ check(entry and entry.layoutIndex == 4.5, "game menu entry sits above Log Out")
 _G.HideUIPanel = function() end
 entry.cb()
 check(f._shown, "game menu entry opens the window")
-T3Code_Binding("toggle")
+OrcaWow_Binding("toggle")
 check(not f._shown, "shortcut toggles it closed")
 check(#(ns.db.errors or {}) == 0, "no errors recorded")
 
 -- Slash command
-SlashCmdList.T3CODE("status")
+SlashCmdList.ORCAWOW("status")
 check(#Stub.printed > 0, "status printed: " .. Stub.printed[#Stub.printed])
 
 -- Self-test: the long control plays, the empty one doesn't -> bells usable
-Stub.validSounds = { ["Interface\\AddOns\\T3Code\\Signals\\03999.wav"] = true }
+Stub.validSounds = { ["Interface\\AddOns\\OrcaWow\\Signals\\03999.wav"] = true }
 ns.Transport.signals = "untested"
 ns.Transport.testing = nil
 ns.Transport:SelfTest()
@@ -518,11 +519,11 @@ ns.Transport.signals = "ok"
 
 -- A bell rung a couple of numbers ahead is still heard; bells map onto 8 rotating
 -- files. Only a fresh snapshot moves the bell position (to the bridge's nextSig).
-local function BellPath(k) return string.format("Interface\\AddOns\\T3Code\\Signals\\%05d.wav", 3991 + (k - 1) % 8) end
+local function BellPath(k) return string.format("Interface\\AddOns\\OrcaWow\\Signals\\%05d.wav", 3991 + (k - 1) % 8) end
 local freshFile = os.tmpname()
 do
 	local fh = assert(io.open(freshFile, "w"))
-	fh:write(string.format("dofile(%q) T3Code_Inbox.gen = 9e15 T3Code_Inbox.nextSig = 503\n", snapshot))
+	fh:write(string.format("dofile(%q) OrcaWow_Inbox.gen = 9e15 OrcaWow_Inbox.nextSig = 503\n", snapshot))
 	fh:close()
 end
 ns.Transport.exhausted = nil
@@ -556,7 +557,7 @@ Stub.now = Stub.now + 5
 ns.Transport:HideStrip() -- (as if the bridge acknowledged it; isolates the bell check)
 ns.Transport.lastLoadAt = Stub.now
 ns.Transport.bellProbe = nil
-Stub.validSounds = { [BellPath(503)] = true, ["Interface\\AddOns\\T3Code\\Signals\\04000.wav"] = true }
+Stub.validSounds = { [BellPath(503)] = true, ["Interface\\AddOns\\OrcaWow\\Signals\\04000.wav"] = true }
 local loads2 = Stub.loadCount
 for _ = 1, 12 do Stub.Tick(0.2) end
 check(Stub.loadCount == loads2, "no slot loaded while the client is too slow to tell bells apart")
@@ -643,6 +644,200 @@ do
 	check(mb._shown == false, "minimap button can be hidden")
 	ns.db.settings.minimapButton = true
 	ns.MinimapButton:Refresh()
+end
+
+-- Orca backend: no model or reasoning pickers, no usage tab, Orca's words, and the
+-- same commands underneath.
+do
+	local main, f = ns.Main, ns.Main.frame
+	local hdr = f.Pages.threads.Right.Header
+	local function Snapshot(bridge, extra)
+		local s = { gen = ns.db.gen + 1, now = os.time(), threads = data.threads, projects = data.projects, usage = {}, bridge = bridge, ack = { ui = ns.ui, seq = ns.Transport.stripSeq } }
+		for k, v in pairs(extra or {}) do s[k] = v end
+		ns.Transport:Apply(s)
+	end
+	local orcaBridge = { version = "0.4.0", backend = "orca", t3 = "connected", dictation = "test backend" }
+	-- No `models` section: Orca's agents pick their own. The T3 list from earlier is
+	-- still held, so this also checks that a stale list doesn't bring the pickers back.
+	Snapshot(orcaBridge, { view = { id = firstThread.id, msgs = data.view.msgs } })
+	check(ns.Store:IsOrca() and ns.Store:AppName() == "Orca", "bridge.backend = 'orca' switches to Orca")
+	ns.Main.page = "usage"
+	main:Open()
+	main:SelectThread(firstThread.id)
+	main:Refresh()
+	check(main.page == "threads", "an open Usage page gives way to the agents")
+	check(not f.Tabs[2]:IsShown(), "no Usage tab")
+	check(f.Tabs[1].tooltipText == "Agents", "the first tab is Agents")
+	main:ShowPage("usage")
+	check(main.page == "threads", "the Usage page can't be opened")
+	check(not hdr.Model:IsShown() and not hdr.Effort:IsShown(), "no model or reasoning picker on an open agent")
+	check(hdr.Action:GetText() == "Mark done", "Settle reads Mark done: " .. hdr.Action:GetText())
+	hdr.Action:Click()
+	check(ns.Transport.queue[#ns.Transport.queue].verb == "settle", "Mark done still sends settle")
+	check(f.Bar.New:GetText() == "New agent", "New Thread reads New agent")
+	-- A settled agent: Reopen, and Archive becomes Sleep worktree.
+	local settled
+	for _, th in ipairs(data.threads) do if th.s == "settled" then settled = th end end
+	main:SelectThread(settled.id)
+	check(hdr.Action:GetText() == "Reopen" and hdr.Archive:IsShown() and hdr.Archive:GetText() == "Sleep worktree", "a done agent offers Reopen and Sleep worktree")
+	hdr.Archive:Click()
+	check(ns.Transport.queue[#ns.Transport.queue].verb == "archive", "Sleep worktree still sends archive")
+	local listed = {}
+	for _, r in ipairs(ns.ThreadList.scrollBox._rows) do if r.ed.header then listed[r.ed.key] = r.ed.label end end
+	check(listed.settled == "Done", "the Settled group reads Done")
+	-- New agent on a bridge that offers no agents: no pickers, and no model rides along.
+	local opts = f.Pages.threads.Right.NewOptions
+	main:StartNewThread()
+	check(f.Subtitle:GetText() == "New agent in " .. ns.Store:ProjectName(main.newProject) and not hdr.Model:IsShown() and not hdr.Effort:IsShown() and hdr.Project:IsShown() and not opts:IsShown(), "a new agent asks only for the project: " .. f.Subtitle:GetText())
+	check(main:ChosenNewModel() == nil and main:ChosenNewEffort() == nil, "a model remembered from T3 Code isn't sent to Orca")
+	main.composer._text = "Start an Orca agent"
+	main:Send()
+	local new = ns.Transport.queue[#ns.Transport.queue]
+	check(new.verb == "new" and new.args[2] == "Start an Orca agent" and new.args[3] == nil and new.args[4] == nil, "the new command carries just the project and the text")
+	main:Back()
+
+	-- With the bridge's agent list: pick the agent, and optionally the worktree's name
+	-- and base branch.
+	local agentsSection = { d = "claude", o = { { i = "claude", l = "Claude" }, { i = "codex", l = "Codex" }, { i = "gemini", l = "Gemini" } } }
+	Snapshot(orcaBridge, { agents = agentsSection })
+	ns.db.lastAgent = nil
+	main:StartNewThread()
+	local project = main.newProject
+	local projectName = ns.Store:ProjectName(project)
+	check(opts:IsShown() and opts.Agent:IsVisible() and opts.Name:IsVisible() and opts.Branch:IsVisible(), "the new-agent form shows the agent picker and the two boxes")
+	check(opts.Agent.value == "claude" and opts.Agent.Text:GetText() == "Claude" and #opts.Agent.options == 3, "the agent picker preselects the bridge's default: " .. opts.Agent.Text:GetText())
+	check(opts.Name.Placeholder:IsShown() and opts.Name.Placeholder:GetText() == "auto" and opts.Branch.Placeholder:GetText() == "default branch", "empty boxes say what they default to")
+	check(not hdr.Model:IsShown() and not hdr.Effort:IsShown(), "still no model or reasoning picker")
+	check(ns.Transcript.inset._points[1][2] == opts, "the conversation hangs under the options row, not over it")
+	check(f.Subtitle:GetText() == "New Claude agent in " .. projectName, "the subtitle names the agent: " .. f.Subtitle:GetText())
+	ns.UI.OpenList(opts.Agent)
+	for _, r in ipairs(ns.UI.ListOpen().Box._rows) do if r.ed.value == "codex" then r.frame:Click() end end
+	check(ns.UI.ListOpen() == nil and opts.Agent.value == "codex" and ns.db.lastAgent == "codex", "picking Codex from the list remembers it")
+	check(f.Subtitle:GetText() == "New Codex agent in " .. projectName, "and the subtitle follows: " .. f.Subtitle:GetText())
+	-- An invalid name is caught here, with the reason under the boxes, and nothing is sent.
+	local queued = #ns.Transport.queue
+	opts.Name:SetText("bad name!")
+	main.composer._text = "Add dark mode"
+	main:Send()
+	check(#ns.Transport.queue == queued and main.composer._text == "Add dark mode" and main.mode == "new", "an invalid worktree name blocks the send")
+	check(opts.Hint:GetText():find("only letters, digits", 1, true) ~= nil, "the hint says which characters work: " .. opts.Hint:GetText())
+	opts.Name:SetText("dark-mode")
+	opts.Branch:SetText(" develop ")
+	main:Refresh()
+	check(not opts.Hint:GetText():find("only letters", 1, true) and not opts.Name.Placeholder:IsShown(), "a valid name clears the hint")
+	main:Send()
+	new = ns.Transport.queue[#ns.Transport.queue]
+	local function Args(cmd) local out = {} for i = 1, select("#", unpack(cmd.args)) do out[i] = tostring(cmd.args[i]) end return table.concat(out, "|") end
+	check(new.verb == "new" and Args(new) == table.concat({ project, "Add dark mode", "codex", "dark-mode", "develop" }, "|"), "new sends project, text, agent, name, branch: " .. Args(new))
+	check(opts.Name:GetText() == "" and opts.Branch:GetText() == "" and main:ChosenNewAgent() == "codex", "after sending, the boxes reset and the agent stays")
+	-- Orca refuses it (the name is taken): what was typed comes back.
+	Snapshot(orcaBridge, { agents = agentsSection, results = { { id = main.pendingNew, ok = false, msg = "There's already a worktree called \"dark-mode\". Pick another name." } } })
+	check(opts.Name:GetText() == "dark-mode" and opts.Branch:GetText() == "develop" and main.composer._text == "Add dark mode", "a refused new agent puts the name, branch and task back")
+	-- Extras left empty: just the agent; a branch without a name keeps the name's place.
+	main:ClearNewWorktreeFields()
+	main:PickAgent("claude")
+	main.composer._text = "Plain one"
+	main:Send()
+	new = ns.Transport.queue[#ns.Transport.queue]
+	check(Args(new) == table.concat({ project, "Plain one", "claude" }, "|"), "empty extras send project, text and agent only: " .. Args(new))
+	opts.Branch:SetText("release/1.2")
+	main.composer._text = "From release"
+	main:Send()
+	new = ns.Transport.queue[#ns.Transport.queue]
+	check(Args(new) == table.concat({ project, "From release", "claude", "", "release/1.2" }, "|"), "a branch without a name sends an empty name: " .. Args(new))
+	main:Back()
+	check(not opts:IsShown() and ns.Transcript.inset._points[1][2] == hdr, "leaving the form hides the row and the conversation moves back up")
+	-- The controller reaches the row: Down from the project, Left/Right along it.
+	main:StartNewThread()
+	ns.Gamepad:Highlight(hdr.Project)
+	local down = f._scripts.OnGamePadButtonDown
+	down(f, "PADDDOWN")
+	check(ns.Gamepad.selected == opts.Agent, "Down from the project goes to the agent picker")
+	down(f, "PADDRIGHT")
+	check(ns.Gamepad.selected == opts.Name, "Right goes to the worktree name")
+	down(f, "PADDRIGHT")
+	check(ns.Gamepad.selected == opts.Branch, "and on to the base branch")
+	down(f, "PADDLEFT")
+	down(f, "PADDLEFT")
+	check(ns.Gamepad.selected == opts.Agent, "Left goes back to the agent picker")
+	down(f, "PAD1")
+	check(ns.UI.ListOpen() and ns.UI.ListOpen().owner == opts.Agent, "A opens the agent list")
+	down(f, "PAD2")
+	check(ns.UI.ListOpen() == nil and ns.Gamepad.selected == opts.Agent, "B closes it, back on the picker")
+	down(f, "PADDDOWN")
+	check(ns.Gamepad.selected == main.composer, "Down from the row goes to the message box")
+	down(f, "PADDUP")
+	check(ns.Gamepad.selected == opts.Agent, "Up from the message box comes back to the row")
+	down(f, "PADDUP")
+	check(ns.Gamepad.selected == hdr.Project, "and Up again to the project")
+	main:Back()
+	-- /orca new: the remembered agent and Orca's defaults, or what the flags say.
+	opts.Name:SetText("left-over")
+	SlashCmdList.ORCAWOW("new Just the task")
+	check(main.mode == "new" and opts.Agent.value == "claude" and opts.Name:GetText() == "" and opts.Branch:GetText() == "" and main.composer._text == "Just the task", "/orca new uses the remembered agent, an automatic name and the default branch")
+	SlashCmdList.ORCAWOW("new --agent Codex --name feat/x --base=develop Fix the tracker")
+	check(opts.Agent.value == "codex" and opts.Name:GetText() == "feat/x" and opts.Branch:GetText() == "develop" and main.composer._text == "Fix the tracker", "/orca new --agent --name --base fills the form")
+	main:Send()
+	new = ns.Transport.queue[#ns.Transport.queue]
+	check(Args(new) == table.concat({ project, "Fix the tracker", "codex", "feat/x", "develop" }, "|"), "and sends it: " .. Args(new))
+	Stub.printed = {}
+	queued = #ns.Transport.queue
+	SlashCmdList.ORCAWOW("new --agent nope Task")
+	check(#ns.Transport.queue == queued and Stub.printed[1] and Stub.printed[1]:find("no agent called", 1, true), "/orca new with an unknown agent says so: " .. tostring(Stub.printed[1]))
+	main:Back()
+	-- Approval in Orca's words, with the same decisions underneath.
+	main:SelectThread(firstThread.id)
+	Snapshot(orcaBridge, { view = { id = firstThread.id, msgs = data.view.msgs, pending = { id = "ap9", kind = "approval", what = "Run a command", detail = "npm test" } } })
+	local labels, byLabel = {}, {}
+	for _, r in ipairs(ns.Transcript.scrollBox._rows) do
+		if r.ed.kind == "option" then table.insert(labels, r.ed.label) byLabel[r.ed.label] = r end
+	end
+	check(table.concat(labels, "|") == "Yes|Yes, don't ask again|No", "approval reads Yes / Yes, don't ask again / No: " .. table.concat(labels, "|"))
+	byLabel["Yes, don't ask again"].frame:Click()
+	check(ns.Transport:Payload():find("approve\031" .. firstThread.id .. "\031ap9\031acceptForSession", 1, true) ~= nil, "Yes, don't ask again sends acceptForSession")
+	Snapshot(orcaBridge, { view = { id = firstThread.id, msgs = data.view.msgs, pending = { id = "ap10", kind = "approval", what = "Run a command", detail = "rm -rf build", always = true } } })
+	labels = {}
+	for _, r in ipairs(ns.Transcript.scrollBox._rows) do if r.ed.kind == "option" then table.insert(labels, r.ed.label) end end
+	check(table.concat(labels, "|") == "Yes|Yes, don't ask again|Always allow this|No", "Always allow this shows when the request offers it")
+	-- Controller: the bumpers skip the missing Usage tab.
+	local down = f._scripts.OnGamePadButtonDown
+	down(f, "PADRSHOULDER")
+	check(main.page == "settings", "RB goes from the agents straight to Settings")
+	down(f, "PADRSHOULDER")
+	check(main.page == "threads", "and wraps back to the agents")
+	-- Link status, tracker, minimap and game menu.
+	Snapshot({ version = "0.4.0", backend = "orca", t3 = "offline" })
+	local status = f.Status:GetText()
+	check(status:find("Orca: offline", 1, true) and status:find("open Orca on your computer", 1, true), "offline status names Orca and what to do: " .. status)
+	ns.Tracker:Refresh()
+	check(ns.Tracker.frame.Header.Text:GetText() == "Orca", "the tracker section is headed Orca")
+	local tipLines = {}
+	local tip = { SetText = function(_, text) table.insert(tipLines, text) end, AddLine = function(_, text) table.insert(tipLines, text) end }
+	ns.MinimapButton:Tooltip(tip)
+	check(tipLines[1] == "Orca" and table.concat(tipLines, "\n"):find("Open Orca on your computer", 1, true), "the minimap tooltip names Orca and says it's offline")
+	GameMenuFrame:InitButtons()
+	local entry
+	for _, b in ipairs(GameMenuFrame.buttons) do if b.text == "Orca" then entry = b end end
+	check(entry ~= nil, "the game menu entry reads Orca")
+	Stub.printed = {}
+	SlashCmdList.ORCAWOW("usage")
+	check(main.page == "threads" and Stub.printed[1] and Stub.printed[1]:find("doesn't report usage", 1, true), "/orca usage explains Orca has none")
+	-- Back on an older bridge (no backend): T3 Code's tab and pickers return.
+	Snapshot(data.bridge, { view = { id = firstThread.id, msgs = data.view.msgs } })
+	main:SelectThread(firstThread.id)
+	main:Refresh()
+	check(not ns.Store:IsOrca() and f.Tabs[2]:IsShown() and hdr.Model:IsShown(), "without a backend the Usage tab and model picker come back")
+	check(hdr.Action:GetText() == "Settle" and f.Bar.New:GetText() == "New Thread", "and T3 Code's words")
+	-- T3 Code's new thread: model and reasoning pickers, no agent row, the old command.
+	main:StartNewThread()
+	check(hdr.Model:IsShown() and not opts:IsShown() and main:ChosenNewAgent() == nil and f.Subtitle:GetText() == "New Thread", "a T3 Code thread shows the model picker and no agent row")
+	main.composer._text = "A T3 thread"
+	main:Send()
+	new = ns.Transport.queue[#ns.Transport.queue]
+	local mi, ms = ns.Store.SplitModelKey(main:ChosenNewModel())
+	check(new.verb == "new" and new.args[2] == "A T3 thread" and new.args[3] == mi and new.args[4] == ms and ms ~= nil, "and sends new with the instance and model: " .. Args(new))
+	main:Back()
+	check(#(ns.db.errors or {}) == 0, "no errors recorded with Orca")
 end
 
 -- Exhaustion

@@ -81,6 +81,10 @@ function G:Candidates()
 		add(header.Project)
 		add(header.Model)
 		add(header.Effort)
+		local o = page.Right.NewOptions
+		add(o.Agent)
+		add(o.Name)
+		add(o.Branch)
 		local tbox = ns.Transcript.scrollBox
 		tbox:ForEachFrame(function(frame, ed)
 			if ed.kind == "option" and InsideBox(frame, tbox) then add(frame, tbox, ed) end
@@ -243,6 +247,8 @@ local DIRS = {
 --   list  --Right-->  first answer option if the agent is asking, else message box
 --   conversation  Up/Down:  Settle -> options (in order, scrolled into view) -> box
 --   box  --Down-->  Send
+--   new agent (Orca):  Project -> [Agent, Worktree, Base branch] -> box, Left/Right
+--                      along that row
 --   conversation  --Left-->  the open thread's row in the list
 --   bottom buttons  --Up-->  the list (under it) or the message box
 
@@ -314,8 +320,9 @@ function G:Zone(cur)
 	local w = cur.w
 	local right = main.frame.Pages.threads.Right
 	if w == ns.ThreadList.dropdown or cur.box == ns.ThreadList.scrollBox then return "list" end
-	local h = right.Header
-	if w == main.composer or w == h.Action or w == h.Archive or w == h.Project or w == h.Model or w == h.Effort or cur.box == ns.Transcript.scrollBox then
+	local h, o = right.Header, right.NewOptions
+	if w == main.composer or w == h.Action or w == h.Archive or w == h.Project or w == h.Model or w == h.Effort
+		or w == o.Agent or w == o.Name or w == o.Branch or cur.box == ns.Transcript.scrollBox then
 		return "convo"
 	end
 	for _, key in ipairs({ "Refresh", "New", "Back", "Stop", "Mic", "Speak", "Shot", "Send" }) do
@@ -345,6 +352,23 @@ function G:ExplicitMove(cur, dirKey)
 		end
 		local at
 		for n, w in ipairs(row) do if w == cur.w then at = n end end
+		-- Orca's new-agent options sit in a row of their own under the header:
+		-- [Agent] [Worktree] [Base branch].
+		local o = right.NewOptions
+		local orow = {}
+		for _, w in ipairs({ o.Agent, o.Name, o.Branch }) do
+			if Usable(w) then table.insert(orow, w) end
+		end
+		local oat
+		for n, w in ipairs(orow) do if w == cur.w then oat = n end end
+		if oat and (dirKey == "PADDLEFT" or dirKey == "PADDRIGHT") then
+			local target = orow[oat + (dirKey == "PADDRIGHT" and 1 or -1)]
+			if target then
+				self:Highlight(target)
+				return true
+			end
+			return false
+		end
 		if at and (dirKey == "PADDLEFT" or dirKey == "PADDRIGHT") then
 			local target = row[at + (dirKey == "PADDRIGHT" and 1 or -1)]
 			if target then
@@ -364,6 +388,7 @@ function G:ExplicitMove(cur, dirKey)
 			local seq = {}
 			local top = Usable(right.Header.Action) and right.Header.Action or (Usable(right.Header.Project) and right.Header.Project)
 			if top then table.insert(seq, { w = top }) end
+			if orow[1] then table.insert(seq, { w = orow[1], row = true }) end
 			if main.mode ~= "new" then
 				for _, i in ipairs(OptionIndexes()) do table.insert(seq, { index = i }) end
 			end
@@ -371,7 +396,7 @@ function G:ExplicitMove(cur, dirKey)
 			local pos
 			local curIndex = cur.box == ns.Transcript.scrollBox and ns.Transcript.scrollBox:FindElementDataIndex(cur.ed)
 			for n, entry in ipairs(seq) do
-				if (entry.w and entry.w == cur.w) or (entry.index and entry.index == curIndex) then pos = n end
+				if (entry.w and entry.w == cur.w) or (entry.index and entry.index == curIndex) or (entry.row and oat) then pos = n end
 			end
 			-- Anywhere on the header row counts as its top.
 			if not pos and at and top then pos = 1 end
@@ -467,6 +492,12 @@ function G:Activate()
 		if w:HasFocus() then ns.Main:Send() else w:SetFocus() end
 		return
 	end
+	local o = ns.Main:NewOptionsFrame()
+	if o and (w == o.Name or w == o.Branch) then
+		-- Only useful with a keyboard plugged in: Forever has no on-screen keyboard.
+		if w:HasFocus() then w:ClearFocus() else w:SetFocus() end
+		return
+	end
 	if w.Click then
 		w:Click("LeftButton")
 	end
@@ -480,9 +511,11 @@ end
 -- Input
 
 local function SwitchPage(delta)
+	-- Orca reports no usage limits, so it has no Usage tab.
+	local pages = ns.Store:IsOrca() and { "threads", "settings" } or PAGES
 	local current = 1
-	for i, p in ipairs(PAGES) do if p == ns.Main.page then current = i end end
-	ns.Main:ShowPage(PAGES[(current - 1 + delta) % #PAGES + 1])
+	for i, p in ipairs(pages) do if p == ns.Main.page then current = i end end
+	ns.Main:ShowPage(pages[(current - 1 + delta) % #pages + 1])
 	PlaySound(SOUNDKIT.IG_CHARACTER_INFO_TAB)
 	G:SelectDefault()
 end
@@ -495,6 +528,8 @@ local function Back()
 		open:Hide()
 	elseif box and box:HasFocus() then
 		box:ClearFocus()
+	elseif main:FocusedOptionBox() then
+		main:FocusedOptionBox():ClearFocus()
 	elseif main.page ~= "threads" then
 		main:ShowPage("threads")
 		G:SelectDefault()
@@ -524,6 +559,8 @@ function G:OnButtonDown(key)
 	local main = ns.Main
 	if DIRS[key] then
 		if main.composer:HasFocus() then main.composer:ClearFocus() end
+		local focused = main:FocusedOptionBox()
+		if focused then focused:ClearFocus() end
 		self:Move(key)
 		self.repeatKey, self.repeatAt = key, GetTime() + REPEAT_FIRST
 	elseif key == "PAD1" then
@@ -659,7 +696,7 @@ function G:HelpText()
 	local chord = ns.Launcher and ns.Launcher.chordText
 	return string.format("%s select  ·  %s back  ·  %s hold to talk  ·  %s read aloud  ·  %s%s tabs%s",
 		UI.Glyph("PAD1"), UI.Glyph("PAD2"), UI.Glyph("PAD4"), UI.Glyph("PAD3"), Bumper("PADLSHOULDER"), Bumper("PADRSHOULDER"),
-		chord and ("\nOpen or close T3 Code anywhere: hold " .. ns.Launcher.KeyText("PADLTRIGGER") .. " + " .. ns.Launcher.KeyText("PADRTRIGGER") .. " and press " .. ns.Launcher.KeyText("PADBACK") .. ".") or "\nOpen T3 Code any time from the minimap button or the game menu.")
+		chord and ("\nOpen or close " .. ns.AppName() .. " anywhere: hold " .. ns.Launcher.KeyText("PADLTRIGGER") .. " + " .. ns.Launcher.KeyText("PADRTRIGGER") .. " and press " .. ns.Launcher.KeyText("PADBACK") .. ".") or ("\nOpen " .. ns.AppName() .. " any time from the minimap button or the game menu."))
 end
 
 
@@ -818,7 +855,7 @@ watcher:SetScript("OnUpdate", function()
 end)
 
 function L:SetupChord()
-	local mine = GetBindingKey("T3CODE_TOGGLE")
+	local mine = GetBindingKey("ORCAWOW_TOGGLE")
 	self.keyText = mine and L.KeyText(mine) or nil
 	self.enabled = ns.db.settings.padChord ~= "off" and C_GamePad ~= nil and ButtonIndex("PADLTRIGGER") ~= nil
 	self.chord = self.enabled and table.concat(L.CHORD, "-") or nil
@@ -838,7 +875,7 @@ function L:HookGameMenu()
 	hooksecurefunc(GameMenuFrame, "InitButtons", function(menu)
 		if ns.db.settings.gameMenu == false then return end
 		local ok, err = pcall(function()
-			local button = menu:AddButton("T3 Code", function()
+			local button = menu:AddButton(ns.AppName(), function()
 				PlaySound(SOUNDKIT.IG_MAINMENU_OPTION)
 				HideUIPanel(menu)
 				L:Open()
@@ -862,11 +899,11 @@ ns:On("Login", function()
 	L:SetupChord()
 	if L.chordText and ns.Gamepad:IsActive() and not ns.db.chordAnnounced then
 		ns.db.chordAnnounced = L.chord
-		ns.Print("Open T3 Code from your controller: hold " .. L.KeyText("PADLTRIGGER") .. " + " .. L.KeyText("PADRTRIGGER") .. " and press " .. L.KeyText("PADBACK") .. ". It's also in the game menu.")
+		ns.Print("Open " .. ns.AppName() .. " from your controller: hold " .. L.KeyText("PADLTRIGGER") .. " + " .. L.KeyText("PADRTRIGGER") .. " and press " .. L.KeyText("PADBACK") .. ". It's also in the game menu.")
 	end
 end)
 
 ns:RegisterEvent("UPDATE_BINDINGS", function()
-	local mine = GetBindingKey("T3CODE_TOGGLE")
+	local mine = GetBindingKey("ORCAWOW_TOGGLE")
 	L.keyText = mine and L.KeyText(mine) or nil
 end)

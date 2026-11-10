@@ -161,9 +161,9 @@ function L:Create(parent)
 	local view = CreateScrollBoxListLinearView(2, 2, 2, 2, 2)
 	view:SetElementFactory(function(factory, ed)
 		if ed.header then
-			factory("T3CodeGroupHeaderTemplate", InitHeader)
+			factory("OrcaWowGroupHeaderTemplate", InitHeader)
 		elseif ed.empty then
-			factory("T3CodeEmptyRowTemplate", function(frame)
+			factory("OrcaWowEmptyRowTemplate", function(frame)
 				if not frame.Text then
 					frame.Text = frame:CreateFontString(nil, "ARTWORK", "GameFontDisable")
 					frame.Text:SetPoint("LEFT", 18, 0)
@@ -173,7 +173,7 @@ function L:Create(parent)
 				frame.Text:SetText(ed.empty)
 			end)
 		else
-			factory("T3CodeThreadRowTemplate", InitRow)
+			factory("OrcaWowThreadRowTemplate", InitRow)
 		end
 	end)
 	view:SetElementExtentCalculator(function(_, ed)
@@ -219,12 +219,15 @@ function L:Refresh(force)
 	self:SetupDropdown()
 
 	local groups = ns.Store:Groups(s.project, self.query)
+	local orca = ns.Store:IsOrca()
 	local dp = CreateDataProvider()
 	for _, g in ipairs(GROUPS) do
 		local list = groups[g.key]
 		local collapsed = s.collapsed[g.key]
 		if #list > 0 or g.key ~= "settled" then
-			dp:Insert({ header = true, key = g.key, label = g.label, count = #list, collapsed = collapsed })
+			-- Orca's "Mark done" is T3's settle.
+			local label = (orca and g.key == "settled") and "Done" or g.label
+			dp:Insert({ header = true, key = g.key, label = label, count = #list, collapsed = collapsed })
 			if not collapsed then
 				for _, t in ipairs(list) do dp:Insert({ thread = t }) end
 				if #list == 0 then
@@ -236,7 +239,8 @@ function L:Refresh(force)
 	if ns.Store.applied == 0 then
 		dp:Insert({ empty = "Waiting for the bridge…" })
 	elseif (ns.Store.data.older or 0) > 0 and not s.collapsed.settled then
-		dp:Insert({ empty = string.format("+%d older settled threads in T3 Code", ns.Store.data.older) })
+		local fmt = orca and "+%d older done agents in Orca" or "+%d older settled threads in T3 Code"
+		dp:Insert({ empty = string.format(fmt, ns.Store.data.older) })
 	end
 	self.scrollBox:SetDataProvider(dp, ScrollBoxConstants.RetainScrollPosition)
 	ns:Fire("ListRebuilt")

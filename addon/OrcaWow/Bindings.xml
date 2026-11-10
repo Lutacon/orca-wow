@@ -1,17 +1,17 @@
 <Bindings>
-	<Binding name="T3CODE_TOGGLE" header="T3CODE" category="ADDONS">
-		T3Code_Binding("toggle")
+	<Binding name="ORCAWOW_TOGGLE" header="ORCAWOW" category="ADDONS">
+		OrcaWow_Binding("toggle")
 	</Binding>
-	<Binding name="T3CODE_NEW" category="ADDONS">
-		T3Code_Binding("new")
+	<Binding name="ORCAWOW_NEW" category="ADDONS">
+		OrcaWow_Binding("new")
 	</Binding>
-	<Binding name="T3CODE_TALK" runOnUp="true" category="ADDONS">
-		T3Code_Binding("talk", keystate)
+	<Binding name="ORCAWOW_TALK" runOnUp="true" category="ADDONS">
+		OrcaWow_Binding("talk", keystate)
 	</Binding>
-	<Binding name="T3CODE_READ" category="ADDONS">
-		T3Code_Binding("read")
+	<Binding name="ORCAWOW_READ" category="ADDONS">
+		OrcaWow_Binding("read")
 	</Binding>
-	<Binding name="T3CODE_HUSH" category="ADDONS">
-		T3Code_Binding("hush")
+	<Binding name="ORCAWOW_HUSH" category="ADDONS">
+		OrcaWow_Binding("hush")
 	</Binding>
 </Bindings>

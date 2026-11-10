@@ -2,14 +2,15 @@
 
 local _, ns = ...
 
-BINDING_HEADER_T3CODE = "T3 Code"
-BINDING_NAME_T3CODE_TOGGLE = "Open or close T3 Code"
-BINDING_NAME_T3CODE_NEW = "Start a new thread"
-BINDING_NAME_T3CODE_TALK = "Push to talk (dictation)"
-BINDING_NAME_T3CODE_READ = "Read the latest reply aloud"
-BINDING_NAME_T3CODE_HUSH = "Stop reading aloud"
+-- Set at load, before any snapshot says which backend runs: named for Orca.
+BINDING_HEADER_ORCAWOW = "Orca"
+BINDING_NAME_ORCAWOW_TOGGLE = "Open or close Orca"
+BINDING_NAME_ORCAWOW_NEW = "Start a new agent"
+BINDING_NAME_ORCAWOW_TALK = "Push to talk (dictation)"
+BINDING_NAME_ORCAWOW_READ = "Read the latest reply aloud"
+BINDING_NAME_ORCAWOW_HUSH = "Stop reading aloud"
 
-function T3Code_Binding(action, keystate)
+function OrcaWow_Binding(action, keystate)
 	if action == "toggle" then
 		ns.Launcher:Open()
 	elseif action == "new" then
@@ -33,7 +34,7 @@ function T3Code_Binding(action, keystate)
 	end
 end
 
-function T3Code_OnAddonCompartmentClick(_, button)
+function OrcaWow_OnAddonCompartmentClick(_, button)
 	if button == "RightButton" then
 		ns.Main:Open()
 		ns.Main:ShowPage("settings")
@@ -42,16 +43,17 @@ function T3Code_OnAddonCompartmentClick(_, button)
 	end
 end
 
-function T3Code_OnAddonCompartmentEnter(_, menuButtonFrame)
+function OrcaWow_OnAddonCompartmentEnter(_, menuButtonFrame)
 	GameTooltip:SetOwner(menuButtonFrame, "ANCHOR_LEFT")
-	GameTooltip:SetText("T3 Code", 1, 0.82, 0)
+	GameTooltip:SetText(ns.AppName(), 1, 0.82, 0)
 	local active = ns.Store:Active()
-	GameTooltip:AddLine(#active > 0 and (#active .. " active thread" .. (#active == 1 and "" or "s")) or "Nothing running", 1, 1, 1)
+	local noun = ns.Store:IsOrca() and " active agent" or " active thread"
+	GameTooltip:AddLine(#active > 0 and (#active .. noun .. (#active == 1 and "" or "s")) or "Nothing running", 1, 1, 1)
 	GameTooltip:AddLine("Click to open, right-click for settings", 0.6, 0.6, 0.6)
 	GameTooltip:Show()
 end
 
-function T3Code_OnAddonCompartmentLeave()
+function OrcaWow_OnAddonCompartmentLeave()
 	GameTooltip:Hide()
 end
 
@@ -65,21 +67,22 @@ function ns.SelfTest()
 		ns.Print((pass and ok or bad) .. " " .. text .. ((not pass and fix) and ns.Color("grey", " — " .. fix) or ""))
 	end
 	ns.Print(ns.Color("gold", "Self-test"))
-	line(T.slotCount > 0, string.format("live-update files: %d found", T.slotCount), "run t3code-wow install, then fully restart the game")
+	line(T.slotCount > 0, string.format("live-update files: %d found", T.slotCount), "run orca-wow install, then fully restart the game")
 	T:SelfTest(function(result)
 		line(result == "ok", "update bells: " .. result .. (result == "ok" and (" (" .. tostring(T.channel) .. " channel)") or ""),
 			"turn game sound on; the addon falls back to slower polling until then")
 	end)
 	local age = T.bridgeNow and (time() - T.bridgeNow) or nil
-	line(age ~= nil and age < 300, "bridge: " .. (b.version and ("t3code-wow " .. b.version) or "not heard from") .. (age and string.format(", last update %ds ago", age) or ""),
-		"check `t3code-wow status` on your desktop")
-	line(b.t3 == "connected", "T3 Code on this computer: " .. tostring(b.t3), b.t3err)
+	line(age ~= nil and age < 300, "bridge: " .. (b.version and ("orca-wow " .. b.version) or "not heard from") .. (age and string.format(", last update %ds ago", age) or ""),
+		"check `orca-wow status` on your desktop")
+	local app = ns.AppName()
+	line(b.t3 == "connected", app .. " on this computer: " .. tostring(b.t3), b.t3err or (ns.Store:IsOrca() and "open Orca on your computer" or nil))
 	for _, e in ipairs(b.envs or {}) do
-		if not e["local"] then line(e.state == "connected", "T3 Code on " .. e.label .. ": " .. tostring(e.state), "check that machine is on and reachable") end
+		if not e["local"] then line(e.state == "connected", app .. " on " .. e.label .. ": " .. tostring(e.state), "check that machine is on and reachable") end
 	end
 	line(T:SlotsLeft() > 40, string.format("live updates left: %d of %d", T:SlotsLeft(), T.slotCount), "/reload to free a fresh set")
 	local errs = ns.db.errors or {}
-	line(#errs == 0, string.format("addon errors recorded: %d", #errs), "/t3 errors to see them")
+	line(#errs == 0, string.format("addon errors recorded: %d", #errs), "/orca errors to see them")
 	-- Round trip: show the strip and time the bridge's acknowledgement.
 	T:Touch()
 	local seq, started = T.stripSeq, GetTime()
@@ -92,7 +95,7 @@ function ns.SelfTest()
 		elseif elapsed > 8 then
 			ticker:Cancel()
 			line(false, "round trip to the bridge: no answer in 8s",
-				"is the game window visible on screen? `t3code-wow status --log` shows what the bridge sees")
+				"is the game window visible on screen? `orca-wow status --log` shows what the bridge sees")
 		end
 	end)
 end
@@ -100,25 +103,95 @@ end
 local function Status()
 	local T = ns.Transport
 	local b = ns.Store.data.bridge or {}
-	ns.Print(string.format("link %s · T3 %s · %d threads · live updates left %d/%d · signals %s · queued %d",
-		T:BridgeState(), b.t3 or "?", #ns.Store.data.threads, T:SlotsLeft(), T.slotCount, T.signals .. " (" .. tostring(T.channel) .. ", " .. tostring(T.selfTests or 0) .. " tests)", #T.queue))
+	local orca = ns.Store:IsOrca()
+	ns.Print(string.format("link %s · %s %s · %d %s · live updates left %d/%d · signals %s · queued %d",
+		T:BridgeState(), orca and "Orca" or "T3", b.t3 or "?", #ns.Store.data.threads, orca and "agents" or "threads", T:SlotsLeft(), T.slotCount, T.signals .. " (" .. tostring(T.channel) .. ", " .. tostring(T.selfTests or 0) .. " tests)", #T.queue))
 end
 
-SLASH_T3CODE1 = "/t3"
-SLASH_T3CODE2 = "/t3code"
-SlashCmdList.T3CODE = function(msg)
+-- "--agent codex --name x --base develop the task" -> { agent, name, base }, "the
+-- task". Flags come first; "--flag=value" works too, and "--" ends them.
+local NEW_FLAGS = { agent = "agent", name = "name", base = "base", branch = "base" }
+
+local function ParseNewFlags(rest)
+	local opts = {}
+	rest = rest or ""
+	while true do
+		local flag, after = rest:match("^%-%-(%S*)%s*(.-)$")
+		if not flag then break end
+		if flag == "" then
+			rest = after
+			break
+		end
+		local key, value = flag:match("^([^=]+)=(.*)$")
+		if key then
+			rest = after
+		else
+			key = flag
+			value, rest = after:match("^(%S*)%s*(.-)$")
+		end
+		key = NEW_FLAGS[key:lower()]
+		if not key then return nil, nil, "Unknown option --" .. flag .. "." end
+		if not value or value == "" then return nil, nil, "--" .. flag .. " needs a value." end
+		opts[key] = value
+	end
+	return opts, rest
+end
+
+SLASH_ORCAWOW1 = "/orca"
+SLASH_ORCAWOW2 = "/orcawow"
+SlashCmdList.ORCAWOW = function(msg)
 	msg = strtrim(msg or "")
 	local cmd, rest = msg:match("^(%S*)%s*(.-)$")
 	cmd = (cmd or ""):lower()
 	if cmd == "" then
 		ns.Main:Toggle()
 	elseif cmd == "new" then
+		local opts, text, err = ParseNewFlags(rest)
+		if err then
+			ns.Print(ns.Color("red", err))
+			ns.Print("/orca new [--agent <id>] [--name <worktree>] [--base <branch>] [text]")
+			return
+		end
+		local orca = ns.Store:IsOrca()
+		local agents = orca and ns.Store:AgentOptions()
+		if (opts.agent or opts.name or opts.base) and not agents then
+			ns.Print(orca and "This bridge doesn't offer a choice of agent, worktree name or base branch yet. Update orca-wow."
+				or "--agent, --name and --base are for Orca. T3 Code picks those itself.")
+			return
+		end
+		if opts.agent then
+			local wanted = opts.agent:lower()
+			local found
+			for _, o in ipairs(agents) do
+				if o.value:lower() == wanted or o.label:lower() == wanted then found = o.value end
+			end
+			if not found then
+				local ids = {}
+				for _, o in ipairs(agents) do table.insert(ids, o.value) end
+				ns.Print(ns.Color("red", "Orca has no agent called \"" .. opts.agent .. "\".") .. " Pick one of: " .. table.concat(ids, ", "))
+				return
+			end
+			opts.agent = found
+		end
 		ns.Main:StartNewThread()
-		if rest ~= "" then ns.Main.composer:SetText(rest) end
+		if agents then
+			-- A plain /orca new gets the remembered agent, an automatic name and the
+			-- default branch, whatever was left in the boxes before.
+			ns.Main.newAgent = opts.agent
+			local o = ns.Main:NewOptionsFrame()
+			o.Name:SetText(opts.name or "")
+			o.Branch:SetText(opts.base or "")
+			ns.Main:Refresh()
+		end
+		if text ~= "" then ns.Main.composer:SetText(text) end
 	elseif cmd == "settings" or cmd == "options" then
 		ns.Main:Open()
 		ns.Main:ShowPage("settings")
 	elseif cmd == "usage" then
+		if ns.Store:IsOrca() then
+			ns.Print("Orca doesn't report usage limits.")
+			return
+		end
 		ns.Main:Open()
 		ns.Main:ShowPage("usage")
 	elseif cmd == "status" then
@@ -155,13 +228,17 @@ SlashCmdList.T3CODE = function(msg)
 				local e = list[i]
 				ns.Print(ns.Color("grey", date("%H:%M:%S", e.t)) .. " " .. ns.Color("red", e.msg))
 			end
-			ns.Print(ns.Color("grey", "(/t3 errors clear to reset. They're also saved with the addon's data on /reload.)"))
+			ns.Print(ns.Color("grey", "(/orca errors clear to reset. They're also saved with the addon's data on /reload.)"))
 		end
 	else
-		ns.Print("/t3 — open the window")
-		ns.Print("/t3 new [text] — start a new thread")
-		ns.Print("/t3 report [what went wrong] — diagnostics + screenshot into the message box")
-		ns.Print("/t3 shot — attach a screenshot to your next message")
-		ns.Print("/t3 selftest | usage | settings | status | tracker | unlock | lock | hush | errors")
+		local orca = ns.Store:IsOrca()
+		ns.Print("/orca — open the window")
+		ns.Print("/orca new [text] — start a new " .. (orca and "agent" or "thread"))
+		if orca and ns.Store:AgentOptions() then
+			ns.Print("/orca new --agent codex --name <worktree> --base <branch> [text] — the same, with those filled in")
+		end
+		ns.Print("/orca report [what went wrong] — diagnostics + screenshot into the message box")
+		ns.Print("/orca shot — attach a screenshot to your next message")
+		ns.Print("/orca selftest | " .. (orca and "" or "usage | ") .. "settings | status | tracker | unlock | lock | hush | errors")
 	end
 end

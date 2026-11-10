@@ -7,13 +7,13 @@ local Stub = dofile("tools/wowstub.lua")
 Stub.slotData.default = slotFile
 
 local ns = {}
-for line in io.lines(addonDir .. "/T3Code.toc") do
+for line in io.lines(addonDir .. "/OrcaWow.toc") do
 	line = line:gsub("\r", "")
 	if line ~= "" and not line:match("^#") and line:match("%.lua$") then
-		assert(loadfile(addonDir .. "/" .. line:gsub("\\", "/")))("T3Code", ns)
+		assert(loadfile(addonDir .. "/" .. line:gsub("\\", "/")))("OrcaWow", ns)
 	end
 end
-Stub.Fire("ADDON_LOADED", "T3Code")
+Stub.Fire("ADDON_LOADED", "OrcaWow")
 Stub.Fire("PLAYER_LOGIN")
 ns.viewId = threadId
 ns.Transport:Send("send", threadId, text, "auto")

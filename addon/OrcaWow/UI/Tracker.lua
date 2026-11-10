@@ -14,7 +14,7 @@ local WIDTH = 260
 -- "All Objectives" header when that's collapsed, or in the tracker's place when the
 -- tracker has nothing to show. It only anchors to the tracker and never runs inside
 -- it, so the tracker's secure quest-item buttons stay untouched. Dragging it (after
--- /t3 unlock) gives it a spot of its own; "Reset tracker" in Settings brings it back.
+-- /orca unlock) gives it a spot of its own; "Reset tracker" in Settings brings it back.
 local function AttachState()
 	local p = ns.db.settings.trackerPoint
 	if p then return "custom" end
@@ -104,7 +104,7 @@ end
 
 function K:Create()
 	if self.frame then return end
-	local f = CreateFrame("Frame", "T3CodeTracker", UIParent)
+	local f = CreateFrame("Frame", "OrcaWowTracker", UIParent)
 	f:SetSize(WIDTH, 40)
 	f:SetFrameStrata("LOW")
 	f:SetClampedToScreen(true)
@@ -178,12 +178,14 @@ function K:Refresh(resetPosition)
 		if #entries >= MAX_LINES then break end
 		if (t.s == "open" or t.s == "failed") and t.un then table.insert(entries, t) end
 	end
+	f.Header.Text:SetText(ns.AppName())
 	local state = ns.Transport:BridgeState()
 	local notice
 	if state == "exhausted" then
 		notice = { text = "Live updates paused", sub = "Click to /reload", action = function() ReloadUI() end }
 	elseif #entries > 0 and (state == "stale" or state == "t3offline") then
-		notice = { text = "Connection lost", sub = state == "stale" and "Is t3code-wow running?" or "T3 Code is offline" }
+		local offline = ns.Store:IsOrca() and "Orca is offline: open it on your computer" or "T3 Code is offline"
+		notice = { text = "Connection lost", sub = state == "stale" and "Is orca-wow running?" or offline }
 	end
 
 	if #entries == 0 and not notice and not s.trackerAlways then

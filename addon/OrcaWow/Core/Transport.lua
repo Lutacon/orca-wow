@@ -1,4 +1,4 @@
--- The link to the t3code-wow bridge.
+-- The link to the orca-wow bridge.
 --
 -- Addons can't open sockets or read files, so this uses three things the client
 -- does allow (measured on live Forever clients; see docs/ARCHITECTURE.md):
@@ -6,7 +6,7 @@
 --  out   A strip of colored squares in the top-left corner that the bridge reads
 --        with a screen capture. It carries a status record and queued commands,
 --        and is only drawn until the bridge acknowledges it (usually < 1 s).
---  in    Load-on-demand "slot" addons (T3Code_S001...). LoadAddOn reads a slot's
+--  in    Load-on-demand "slot" addons (OrcaWow_S001...). LoadAddOn reads a slot's
 --        Lua from disk when it loads, so the bridge writes a snapshot there first.
 --        Each slot loads once per UI session; /reload frees them all.
 --  ping  "Bells": large silent .wav files the bridge fills or empties to say "a new
@@ -23,8 +23,8 @@ local Crypto = ns.Crypto
 local T = {}
 ns.Transport = T
 
-local SLOT_FMT = "T3Code_S%03d"
-local SIG_FMT = "Interface\\AddOns\\T3Code\\Signals\\%05d.wav"
+local SLOT_FMT = "OrcaWow_S%03d"
+local SIG_FMT = "Interface\\AddOns\\OrcaWow\\Signals\\%05d.wav"
 local CELL = 3 -- physical pixels per strip square
 local SIGNAL_POLL = 0.5
 local MIN_LOAD_GAP = 0.6
@@ -46,7 +46,7 @@ local function SlotName(i)
 end
 
 ---------------------------------------------------------------------------
--- Link keys. File-local on purpose: `ns` is exported as the T3Code global, and
+-- Link keys. File-local on purpose: `ns` is exported as the OrcaWow global, and
 -- nothing outside this file needs the keys.
 
 local link -- { hex, enc, mac = HMAC function }
@@ -204,7 +204,7 @@ function T:LoadNextSlot(why)
 	local name = SlotName(self.slotCursor)
 	self.slotCursor = self.slotCursor + 1
 	self.lastLoadAt = now
-	T3Code_Inbox = nil
+	OrcaWow_Inbox = nil
 	local loaded, reason = C_AddOns.LoadAddOn(name)
 	if not loaded and reason == "DISABLED" then
 		C_AddOns.EnableAddOn(name)
@@ -217,8 +217,8 @@ function T:LoadNextSlot(why)
 	end
 	self.loads = self.loads + 1
 	local fresh = false
-	local data = T3Code_Inbox
-	T3Code_Inbox = nil
+	local data = OrcaWow_Inbox
+	OrcaWow_Inbox = nil
 	if type(data) == "table" then
 		local newKeys = SetKeys(data.key)
 		data.key = nil
@@ -342,7 +342,7 @@ local cells = {}
 
 local function EnsureStrip()
 	if strip then return strip end
-	strip = CreateFrame("Frame", "T3CodeLinkStrip", UIParent)
+	strip = CreateFrame("Frame", "OrcaWowLinkStrip", UIParent)
 	strip:SetFrameStrata("TOOLTIP")
 	strip:SetFrameLevel(9999)
 	strip:SetIgnoreParentScale(true)

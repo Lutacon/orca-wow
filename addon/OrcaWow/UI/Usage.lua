@@ -132,7 +132,8 @@ function U:Refresh()
 	end
 	self.content:SetHeight(-y + 10)
 	if #usage == 0 then
-		self.empty:SetText(ns.Store.applied == 0 and "Waiting for the bridge…" or "None of your T3 Code providers report usage limits right now.")
+		local none = ns.Store:IsOrca() and "Orca doesn't report usage limits." or "None of your T3 Code providers report usage limits right now."
+		self.empty:SetText(ns.Store.applied == 0 and "Waiting for the bridge…" or none)
 		self.empty:Show()
 	else
 		self.empty:Hide()

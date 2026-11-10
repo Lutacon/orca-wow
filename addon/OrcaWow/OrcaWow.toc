@@ -1,15 +1,15 @@
 ## Interface: 16001
-## Title: T3 Code
-## Notes: Watch and run your T3 Code agent threads from inside the game. Needs the t3code-wow bridge running on this computer.
+## Title: Orca
+## Notes: Watch and run your Orca coding agents from inside the game. Needs Orca and the orca-wow bridge running on this computer.
 ## Author: Ryan Hughes
 ## Version: 0.3.0
 ## X-License: MIT
 ## X-Website: https://github.com/ryanrhughes/t3code-wow
-## IconTexture: Interface\AddOns\T3Code\Media\icon
-## SavedVariables: T3CodeDB
-## AddonCompartmentFunc: T3Code_OnAddonCompartmentClick
-## AddonCompartmentFuncOnEnter: T3Code_OnAddonCompartmentEnter
-## AddonCompartmentFuncOnLeave: T3Code_OnAddonCompartmentLeave
+## IconTexture: Interface\AddOns\OrcaWow\Media\icon
+## SavedVariables: OrcaWowDB
+## AddonCompartmentFunc: OrcaWow_OnAddonCompartmentClick
+## AddonCompartmentFuncOnEnter: OrcaWow_OnAddonCompartmentEnter
+## AddonCompartmentFuncOnLeave: OrcaWow_OnAddonCompartmentLeave
 ## OptionalDeps: Blizzard_ObjectiveTracker
 
 Core\Codec.lua

@@ -66,6 +66,23 @@ function Store:Thread(id)
 	return id and self.byId[id]
 end
 
+-- The app the bridge runs agents in: "orca", or "t3" (T3 Code) when the bridge
+-- doesn't say, as older bridges don't.
+function Store:Backend()
+	local b = self.data.bridge
+	local backend = b and b.backend
+	return (type(backend) == "string" and backend ~= "") and backend or "t3"
+end
+
+function Store:IsOrca()
+	return self:Backend() == "orca"
+end
+
+-- That app's name, for text people see.
+function Store:AppName()
+	return self:IsOrca() and "Orca" or "T3 Code"
+end
+
 function Store:ProjectName(id)
 	local p = id and self.projectsById[id]
 	return p and p.name or ""
@@ -224,6 +241,39 @@ function Store.HasOption(options, value)
 	return false
 end
 
+---------------------------------------------------------------------------
+-- Orca's agents: which CLI agent a new worktree starts with. The snapshot carries
+-- `agents = { d = <preselected id>, o = { { i = id, l = label }, ... } }` (Orca only).
+
+-- Picker choices and the preselected id, or nil when the bridge offers none (T3
+-- Code, or an older Orca bridge).
+function Store:AgentOptions()
+	local a = self.data.agents
+	if type(a) ~= "table" or type(a.o) ~= "table" then return nil end
+	local options = {}
+	for _, o in ipairs(a.o) do
+		if type(o) == "table" and type(o.i) == "string" and o.i ~= "" then
+			local label = (type(o.l) == "string" and o.l ~= "") and o.l or o.i
+			table.insert(options, { value = o.i, label = label })
+		end
+	end
+	if #options == 0 then return nil end
+	return options, type(a.d) == "string" and a.d or nil
+end
+
+function Store:AgentLabel(id)
+	for _, o in ipairs(self:AgentOptions() or {}) do
+		if o.value == id then return o.label end
+	end
+	return id
+end
+
+-- What Orca (and git) take as a worktree name: letters, digits, ".", "-", "_" and
+-- "/". Empty means Orca names it.
+function Store.ValidWorktreeName(name)
+	return name == nil or name == "" or name:find("^[%w%._/%-]+$") ~= nil
+end
+
 function Store:View()
 	local v = self.data.view
 	if v and v.id == ns.viewId then return v end
@@ -242,6 +292,8 @@ local STATUS_COLOR = {
 }
 
 function Store.StatusText(s)
+	-- Orca's "Mark done" is T3's settle.
+	if s == "settled" and Store:IsOrca() then return "Done" end
 	return STATUS_TEXT[s] or s or ""
 end
 
@@ -296,7 +348,7 @@ function ns.Speak(text, threadId, messageIndex)
 		C_VoiceChat.SpeakText(voice, ns.StripMarkup(text):sub(1, 2000), rate, volume, false)
 		return true
 	end
-	ns.Print("No text-to-speech voice is available. Pick one in T3 Code settings.")
+	ns.Print("No text-to-speech voice is available. Pick one in " .. Store:AppName() .. " settings.")
 	return false
 end
 

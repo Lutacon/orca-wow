@@ -2,7 +2,7 @@
 -- Namespace, saved settings, small helpers and an internal event bus.
 
 local addonName, ns = ...
-T3Code = ns
+OrcaWow = ns
 
 ns.name = addonName
 ns.version = C_AddOns.GetAddOnMetadata(addonName, "Version") or "dev"
@@ -33,7 +33,7 @@ function ns:On(event, fn)
 	table.insert(listeners[event], fn)
 end
 
--- Forever hides Lua errors by default, so keep our own: shown by /t3 errors and the
+-- Forever hides Lua errors by default, so keep our own: shown by /orca errors and the
 -- Settings tab, and saved with the addon's data (readable after /reload).
 ns.errors = {}
 
@@ -51,7 +51,7 @@ function ns.RecordError(err)
 	if not ns.errorNotified then
 		ns.errorNotified = true
 		if DEFAULT_CHAT_FRAME then
-			DEFAULT_CHAT_FRAME:AddMessage("|cffffd100T3 Code|r: |cffff4040something went wrong|r — type /t3 errors for details.")
+			DEFAULT_CHAT_FRAME:AddMessage("|cffffd100" .. ns.AppName() .. "|r: |cffff4040something went wrong|r — type /orca errors for details.")
 		end
 	end
 end
@@ -106,6 +106,7 @@ local DEFAULTS = {
 	drafts = {},
 	models = {}, -- project id -> the model last picked for new threads there
 	efforts = {}, -- project id -> the reasoning level last picked for new threads there
+	-- lastAgent (unset by default): the Orca agent id last picked for a new worktree
 	cmdId = 0,
 	sigNext = 1,
 	gen = 0,
@@ -162,9 +163,14 @@ function ns.Ago(epoch)
 	return math.floor(d / 86400) .. "d"
 end
 
+-- The app's name for chat lines ("Orca" or "T3 Code", from the latest snapshot).
+function ns.AppName()
+	return ns.Store and ns.Store:AppName() or "T3 Code"
+end
+
 function ns.Print(...)
 	local msg = strjoin(" ", tostringall(...))
-	DEFAULT_CHAT_FRAME:AddMessage(ns.Color("gold", "T3 Code") .. ": " .. msg)
+	DEFAULT_CHAT_FRAME:AddMessage(ns.Color("gold", ns.AppName()) .. ": " .. msg)
 end
 
 function ns.InCombat()
@@ -199,9 +205,9 @@ frame:RegisterEvent("PLAYER_REGEN_DISABLED")
 frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 frame:SetScript("OnEvent", ns.Safe(function(_, event, arg1, ...)
 	if event == "ADDON_LOADED" and arg1 == addonName then
-		T3CodeDB = T3CodeDB or {}
-		ApplyDefaults(T3CodeDB, DEFAULTS)
-		ns.db = T3CodeDB
+		OrcaWowDB = OrcaWowDB or {}
+		ApplyDefaults(OrcaWowDB, DEFAULTS)
+		ns.db = OrcaWowDB
 		if not ns.db.session then ns.db.session = RandomToken(8) end
 		-- One token per UI session: the bridge uses it to notice /reload.
 		ns.ui = RandomToken(6)

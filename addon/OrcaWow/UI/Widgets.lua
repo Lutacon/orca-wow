@@ -140,7 +140,7 @@ local MAX_ROWS = 14
 
 local function EnsureList()
 	if list then return list end
-	list = CreateFrame("Frame", "T3CodeDropdownList", UIParent)
+	list = CreateFrame("Frame", "OrcaWowDropdownList", UIParent)
 	list:SetFrameStrata("FULLSCREEN_DIALOG")
 	list:SetToplevel(true)
 	list:EnableMouse(true)
@@ -171,7 +171,7 @@ local function EnsureList()
 	local bar = CreateFrame("EventFrame", nil, list, "MinimalScrollBar")
 	local view = CreateScrollBoxListLinearView(0, 0, 0, 0, 0)
 	view:SetElementExtent(ROW_H)
-	view:SetElementInitializer("T3CodeDropdownRowTemplate", function(row, ed)
+	view:SetElementInitializer("OrcaWowDropdownRowTemplate", function(row, ed)
 		if not row.Text then
 			row:SetHeight(ROW_H)
 			local hl = row:CreateTexture(nil, "HIGHLIGHT")
@@ -209,7 +209,7 @@ local function EnsureList()
 	ScrollUtil.InitScrollBoxListWithScrollBar(box, bar, view)
 	list.Box, list.Bar = box, bar
 
-	tinsert(UISpecialFrames, "T3CodeDropdownList")
+	tinsert(UISpecialFrames, "OrcaWowDropdownList")
 	-- Close on a click anywhere else.
 	list:SetScript("OnUpdate", function(self)
 		if (IsMouseButtonDown("LeftButton") or IsMouseButtonDown("RightButton"))
@@ -310,6 +310,30 @@ function UI.Dropdown(parent, width, onChange)
 		if button == "RightButton" then self:Step(-1) else UI.OpenList(self) end
 	end)
 	return b
+end
+
+-- A single-line text box in the game's own style, with grey placeholder text while
+-- it's empty. Callers read it with GetText; Refresh calls UpdatePlaceholder after
+-- setting text from code.
+function UI.EditBox(parent, width, placeholder, maxLetters)
+	local e = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+	e:SetSize(width or 120, 20)
+	e:SetAutoFocus(false)
+	if maxLetters then e:SetMaxLetters(maxLetters) end
+	local ph = e:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+	ph:SetPoint("LEFT", 1, 0)
+	ph:SetPoint("RIGHT", -2, 0)
+	ph:SetJustifyH("LEFT")
+	ph:SetWordWrap(false)
+	ph:SetText(placeholder or "")
+	e.Placeholder = ph
+	function e:UpdatePlaceholder()
+		self.Placeholder:SetShown((self:GetText() or "") == "")
+	end
+	e:HookScript("OnTextChanged", function(self) self:UpdatePlaceholder() end)
+	e:HookScript("OnEscapePressed", function(self) self:ClearFocus() end)
+	e:UpdatePlaceholder()
+	return e
 end
 
 function UI.Inset(parent)

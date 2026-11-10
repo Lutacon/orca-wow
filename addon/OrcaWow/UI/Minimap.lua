@@ -38,7 +38,7 @@ end
 
 function B:Create()
 	if self.button or not Minimap then return end
-	local b = CreateFrame("Button", "T3CodeMinimapButton", Minimap)
+	local b = CreateFrame("Button", "OrcaWowMinimapButton", Minimap)
 	b:SetSize(31, 31)
 	b:SetFrameStrata("MEDIUM")
 	b:SetFrameLevel(Minimap:GetFrameLevel() + 8)
@@ -52,7 +52,7 @@ function B:Create()
 	bg:SetPoint("TOPLEFT", 7, -5)
 
 	local icon = b:CreateTexture(nil, "ARTWORK")
-	icon:SetTexture("Interface\\AddOns\\T3Code\\Media\\minimap")
+	icon:SetTexture("Interface\\AddOns\\OrcaWow\\Media\\minimap")
 	icon:SetSize(18, 18)
 	icon:SetPoint("TOPLEFT", 7, -6)
 	b.Icon = icon
@@ -98,16 +98,22 @@ function B:Create()
 end
 
 function B:Tooltip(tip)
-	tip:SetText("T3 Code", 1, 0.82, 0)
+	local orca = ns.Store:IsOrca()
+	tip:SetText(ns.AppName(), 1, 0.82, 0)
 	local working, waiting = 0, 0
 	for _, t in ipairs(ns.Store:Active()) do
 		if t.s == "working" then working = working + 1 else waiting = waiting + 1 end
 	end
-	if waiting > 0 then tip:AddLine(waiting .. (waiting == 1 and " thread needs you" or " threads need you"), 1, 0.6, 0.2) end
+	local noun = orca and "agent" or "thread"
+	if waiting > 0 then tip:AddLine(waiting .. (waiting == 1 and (" " .. noun .. " needs you") or (" " .. noun .. "s need you")), 1, 0.6, 0.2) end
 	if working > 0 then tip:AddLine(working .. " working", 0.4, 0.7, 1) end
 	if working + waiting == 0 then tip:AddLine("Nothing running", 1, 1, 1) end
 	local state = ns.Transport:BridgeState()
-	if state ~= "connected" then tip:AddLine("Bridge: " .. state, 0.6, 0.6, 0.6) end
+	if state == "t3offline" and orca then
+		tip:AddLine("Orca: offline. Open Orca on your computer.", 1, 0.25, 0.25)
+	elseif state ~= "connected" then
+		tip:AddLine("Bridge: " .. state, 0.6, 0.6, 0.6)
+	end
 	tip:AddLine("Click to open · Right-click for settings · Drag to move", 0.6, 0.6, 0.6)
 	if ns.Launcher.chordText then tip:AddLine("Controller: hold " .. ns.Launcher.KeyText("PADLTRIGGER") .. " + " .. ns.Launcher.KeyText("PADRTRIGGER") .. ", press " .. ns.Launcher.KeyText("PADBACK"), 0.6, 0.6, 0.6) end
 end
