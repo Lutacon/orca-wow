@@ -442,3 +442,67 @@ function UI.Glyph(key, size)
 	if not atlas then return "" end
 	return CreateAtlasMarkup(atlas, size, size)
 end
+
+-- The game gives addons no clipboard, so copying shows the text in a box, already
+-- selected: the player presses Ctrl+C. Typing in the box puts the text back.
+local copyFrame
+function UI.ShowCopy(text)
+	text = ns.CopyableText(text)
+	local f = copyFrame
+	if not f then
+		f = CreateFrame("Frame", "OrcaWowCopyFrame", UIParent, "ButtonFrameTemplate")
+		copyFrame = f
+		f:SetSize(620, 420)
+		f:SetPoint("CENTER", 0, 20)
+		f:SetFrameStrata("DIALOG")
+		f:SetToplevel(true)
+		f:SetMovable(true)
+		f:SetClampedToScreen(true)
+		f:EnableMouse(true)
+		f:SetTitle("Copy text")
+		f:SetPortraitToAsset(ns.media .. "portrait")
+		tinsert(UISpecialFrames, "OrcaWowCopyFrame")
+
+		local drag = CreateFrame("Frame", nil, f)
+		drag:SetPoint("TOPLEFT", 60, 0)
+		drag:SetPoint("TOPRIGHT", -30, 0)
+		drag:SetHeight(24)
+		drag:EnableMouse(true)
+		drag:RegisterForDrag("LeftButton")
+		drag:SetScript("OnDragStart", function() f:StartMoving() end)
+		drag:SetScript("OnDragStop", function() f:StopMovingOrSizing() end)
+
+		local box = CreateFrame("Frame", nil, f.Inset, "OrcaWowCopyBoxTemplate")
+		box:SetPoint("TOPLEFT", 8, -8)
+		box:SetPoint("BOTTOMRIGHT", -8, 8)
+		box:RegisterCallback("OnEscapePressed", function() f:Hide() end, f)
+		f.Box = box
+		box:GetEditBox():HookScript("OnTextChanged", function(eb, userInput)
+			if userInput and f.text then
+				eb:SetText(f.text)
+				eb:HighlightText()
+			end
+		end)
+
+		f.Hint = UI.Text(f, "GameFontHighlightSmall", "LEFT")
+		f.Hint:SetPoint("BOTTOMLEFT", 14, 9)
+		f.Hint:SetText("Press Ctrl+C to copy the selected text. Drag over the text to copy only part of it.")
+		f.Close = UI.Button(f, "Close", 100, function() f:Hide() end)
+		f.Close:SetPoint("BOTTOMRIGHT", -6, 4)
+		f.SelectAll = UI.Button(f, "Select all", 100, function() UI.SelectCopyText() end)
+		f.SelectAll:SetPoint("RIGHT", f.Close, "LEFT", -6, 0)
+	end
+	f.text = text
+	f.Box:SetText(text)
+	f:Show()
+	f:Raise()
+	UI.SelectCopyText()
+	return f
+end
+
+function UI.SelectCopyText()
+	if not copyFrame then return end
+	local eb = copyFrame.Box:GetEditBox()
+	eb:SetFocus()
+	eb:HighlightText()
+end

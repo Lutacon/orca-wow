@@ -8,6 +8,14 @@
 		</KeyValues>
 	</Frame>
 
+	<!-- The copy box: holds text selected for Ctrl+C (the game gives addons no clipboard). -->
+	<Frame name="OrcaWowCopyBoxTemplate" inherits="ScrollingEditBoxTemplate" virtual="true">
+		<KeyValues>
+			<KeyValue key="maxLetters" value="10000" type="number"/>
+			<KeyValue key="fontName" value="ChatFontNormal" type="string"/>
+		</KeyValues>
+	</Frame>
+
 	<!-- One template per kind of list row: ScrollBox recycles rows per template, so
 	     sharing a plain "Frame" between kinds would leave one kind's text on another. -->
 	<Frame name="OrcaWowMessageRowTemplate" virtual="true"/>

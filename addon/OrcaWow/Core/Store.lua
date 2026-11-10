@@ -165,6 +165,14 @@ function ns.StripMarkup(text)
 	return text
 end
 
+-- Text for the copy box: no colors, icons or atlases. Escaped bars (||) stay
+-- escaped, which is how an edit box holds a typed "|".
+function ns.CopyableText(text)
+	text = tostring(text or "")
+	text = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|T.-|t", ""):gsub("|A.-|a", "")
+	return text
+end
+
 local function GameVoices()
 	if not C_VoiceChat or not C_VoiceChat.GetTtsVoices then return nil end
 	local ok, voices = pcall(C_VoiceChat.GetTtsVoices)

@@ -76,7 +76,7 @@ function S:Create(page)
 
 	local sizeLabel = UI.Text(page, "GameFontHighlight")
 	sizeLabel:SetPoint("TOPLEFT", 22, y - 12)
-	sizeLabel:SetText("Window size")
+	sizeLabel:SetText("Window scale")
 	local size = UI.Dropdown(page, 240, function(value)
 		ns.db.settings.windowScale = value
 		ns.Main:ApplyScale()
