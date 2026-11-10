@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { ReplyParser, bgraToRgb, WinHelper } from '../src/winhelper.js';
-import { taskArguments, taskXml } from '../src/winservice.js';
+import { taskArguments, taskScript, taskXml } from '../src/winservice.js';
 
 const WIN = process.platform === 'win32';
 
@@ -29,14 +33,34 @@ test('converts BGRA to the RGB buffers codec.js reads', () => {
   assert.deepEqual([...img.data], [30, 20, 10]);
 });
 
-test('the logon task runs the bridge hidden and logs its output', () => {
-  const args = taskArguments(['C:\\Program Files\\nodejs\\node.exe', 'C:\\x y\\orca-wow.js', 'run'], 'C:\\state\\bridge.log');
-  assert.equal(args, '--headless cmd.exe /d /c ""C:\\Program Files\\nodejs\\node.exe" "C:\\x y\\orca-wow.js" "run" >> "C:\\state\\bridge.log" 2>&1"');
-  const xml = taskXml(['node.exe', 'a&b.js', 'run'], 'C:\\log');
+test('the logon task XML runs its script hidden', () => {
+  const xml = taskXml('C:\\a&b\\orca-wow-task.cmd');
   assert.match(xml, /<LogonType>InteractiveToken<\/LogonType>/);
-  assert.match(xml, /<RestartOnFailure>/);
-  assert.match(xml, /a&amp;b\.js/);
   assert.match(xml, /conhost\.exe<\/Command>/);
+  assert.match(xml, /cmd\.exe \/d \/c &quot;C:\\a&amp;b\\orca-wow-task\.cmd&quot;/);
+});
+
+// conhost re-quotes its arguments; a quoted cmd /c line used to reach cmd broken, and the
+// bridge never started while the task reported success. Run the real thing.
+test('the logon task script runs the bridge and logs its output under conhost --headless', { skip: !WIN && 'Windows only' }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orca wow %x% '));
+  try {
+    const js = path.join(dir, 'fake bridge.js');
+    fs.writeFileSync(js, 'console.log("out", process.argv.slice(2).join("|")); console.error("err")');
+    const log = path.join(dir, 'bridge.log');
+    const script = path.join(dir, 'orca-wow-task.cmd');
+    fs.writeFileSync(script, taskScript([process.execPath, js, 'run'], log));
+    // Start conhost the way Task Scheduler does, with <Arguments> as its command line.
+    // (Node's own spawn of conhost --headless runs nothing, so it can't stand in.)
+    const sys = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
+    const lit = (s) => `'${s.replace(/'/g, "''")}'`;
+    spawnSync(path.join(sys, 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', `Start-Process -FilePath ${lit(path.join(sys, 'conhost.exe'))} -ArgumentList ${lit(taskArguments(script))} -Wait`], { timeout: 20000 });
+    // conhost returns before the script is done.
+    for (let i = 0; i < 100 && !/err/.test(fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''); i++) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(fs.readFileSync(log, 'utf8').replace(/\r\n/g, '\n'), 'out run\nerr\n');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('the real helper builds, answers, and lists processes', { skip: !WIN && 'Windows only' }, async () => {
