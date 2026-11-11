@@ -14,7 +14,7 @@ OrcaWow_Inbox = {
 	ack = { ui = "fixture", seq = 1 },
 	key = string.rep("0123456789abcdef", 8),
 	bridge = {
-		version = "0.4.1",
+		version = "0.4.2",
 		orca = "connected",
 		host = "desktop",
 		tts = "spd-say",
