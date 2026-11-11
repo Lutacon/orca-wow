@@ -25,6 +25,12 @@ check(OrcaWow == nil and _G.ns == nil, "namespace not exported")
 
 Stub.Fire("ADDON_LOADED", "OrcaWow")
 check(ns.db and ns.db.session and #ns.db.session == 8, "saved variables initialised")
+-- A UI skin (EllesmereUI) that loads before OrcaWow hooks the game menu at login and
+-- styles the buttons it finds; the Orca entry must already be there.
+local skinSawOrca
+hooksecurefunc(GameMenuFrame, "InitButtons", function(menu)
+	for _, b in ipairs(menu.buttons) do if b.text == "Orca" then skinSawOrca = true end end
+end)
 Stub.Fire("PLAYER_LOGIN")
 check(ns.Transport.slotCount == 600, "found 600 slots by binary search")
 check(ns.Store.applied == 1, "bootstrap slot applied")
@@ -434,6 +440,7 @@ GameMenuFrame:InitButtons()
 local entry
 for _, b in ipairs(GameMenuFrame.buttons) do if b.text == "Orca" then entry = b end end
 check(entry and entry.layoutIndex == 4.5, "game menu entry reads Orca and sits above Log Out")
+check(skinSawOrca, "game menu skins hooked at login see the Orca entry")
 _G.HideUIPanel = function() end
 entry.cb()
 check(f._shown, "game menu entry opens the window")
