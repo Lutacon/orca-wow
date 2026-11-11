@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { Bridge, friendlyError, parseFrame, activityLabel, pendingRequest, runSummary, proposedPlan } from '../src/bridge.js';
 import { SlotBank } from '../src/slots.js';
 import { luaValue } from '../src/luaser.js';
-import { markdownToWow, markdownToSpeech } from '../src/format.js';
+import { markdownToWow, markdownToSpeech, escapeWow } from '../src/format.js';
 import { RS, US } from '../src/codec.js';
 import { seal } from '../src/strip-crypto.js';
 import crypto from 'node:crypto';
@@ -400,6 +400,18 @@ test('markdown formatting', () => {
   assert.match(w, /\|\| pipe/);
   assert.match(w, /fn\(\)/);
   assert.equal(markdownToSpeech('**Done**: see [docs](http://x)'), 'Done : see docs');
+});
+
+test('glyphs the game font lacks are swapped for ones it has', () => {
+  // A Claude Code screen: spinner, tool bullet, result elbow, prompt and rule.
+  const w = markdownToWow('```text\n\u273b Saut\u00e9ed for 2m \u00b7 done\n\u23fa Bash(ls)\n  \u23bf  ok \u2713\n\u2500\u2500\u2500\u2500\n\u276f \u2502 x\n```');
+  assert.match(w, /\* Saut\u00e9ed for 2m \u00b7 done/);
+  assert.match(w, /\u2022 Bash\(ls\)/);
+  assert.match(w, /- {2}ok \+/);
+  assert.match(w, /----/);
+  assert.match(w, /> \|\| x/); // a box bar is a pipe, escaped like any other
+  // Replies: arrows, emoji and their variation selectors; Latin and punctuation stay.
+  assert.equal(escapeWow('a \u2192 b \u2705\ufe0f \ud83d\ude80 \u2014 \u00f1 \u2026 \u2264'), 'a -> b +  \u2014 \u00f1 \u2026 <=');
 });
 
 test('run summary, plan text and approval details', () => {
