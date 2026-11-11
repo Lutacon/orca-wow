@@ -890,8 +890,11 @@ function L:HookGameMenu()
 	end)
 end
 
+-- Hooked on load, not login: UI skins (EllesmereUI) hook InitButtons at login and style
+-- the buttons already in the menu, so the Orca entry has to be added before they run.
+ns:On("Loaded", function() L:HookGameMenu() end)
+
 ns:On("Login", function()
-	L:HookGameMenu()
 	L:SetupChord()
 	if L.chordText and ns.Gamepad:IsActive() and not ns.db.chordAnnounced then
 		ns.db.chordAnnounced = L.chord

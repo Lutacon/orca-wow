@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Symbols the game's font doesn't have, like the box lines, arrows, bullets and checkmarks in an agent's terminal and replies, no longer show as empty boxes: they're replaced with plain characters (`->`, `>`, `-`, `+`, `•`).
+- With a UI skin like EllesmereUI, the Orca entry in the game menu now gets the same style as the menu's other buttons.
 
 ## 0.4.2
 
