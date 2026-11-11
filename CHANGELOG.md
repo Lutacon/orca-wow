@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Symbols the game's font doesn't have, like the box lines, arrows, bullets and checkmarks in an agent's terminal and replies, no longer show as empty boxes: they're replaced with plain characters (`->`, `>`, `-`, `+`, `•`).
+
 ## 0.4.2
 
 - Copy text: the copy button in the bottom bar copies the agent's latest reply, and each message has its own next to its time. The game doesn't let addons use the clipboard, so it opens the text already selected in a box: press Ctrl+C.

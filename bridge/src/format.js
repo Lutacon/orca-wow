@@ -7,9 +7,42 @@ const DIM = 'ff9d9d9d';
 
 const color = (hex, s) => `|c${hex}${s}|r`;
 
+// The game's fonts have Latin, general punctuation (dashes, quotes, •, …) and little
+// else past it: box drawing, arrows, shapes and dingbats from agents' terminals and
+// replies show as empty boxes. Swap them for what the game can draw.
+const GLYPHS = new Map(Object.entries({
+  '←': '<-', '→': '->', '↑': '^', '↓': 'v', '↔': '<->', '⇐': '<=', '⇒': '=>', '↳': '->', '↵': '<-', '⏎': '<-',
+  '❯': '>', '›': '>', '▶': '>', '►': '>', '▸': '>', '➤': '>', '➜': '->', '⏵': '>', '❮': '<', '‹': '<', '◀': '<', '◂': '<',
+  '✓': '+', '✔': '+', '✅': '+', '☑': '+', '✗': 'x', '✘': 'x', '❌': 'x', '☒': 'x',
+  '⏺': '•', '⎿': '-', '⏸': '||', '⌘': 'Cmd', '⌥': 'Alt', '⇧': 'Shift', '⌃': 'Ctrl',
+  '≤': '<=', '≥': '>=', '≠': '!=', '≈': '~', '−': '-', '™': 'TM',
+}));
+const SYMBOLS = /[\u2039\u203a\u2100-\u2bff\ue000-\uf8ff\ufe00-\ufe0f\u200b-\u200f\u2060-\u206f]|[\ud800-\udbff][\udc00-\udfff]/g;
+
+function glyph(c) {
+  const mapped = GLYPHS.get(c);
+  if (mapped !== undefined) return mapped;
+  const n = c.codePointAt(0);
+  if (n >= 0x2500 && n <= 0x257f) {
+    if (/[─━═┄┅┈┉╌╍╴╶╸╺]/.test(c)) return '-';
+    if (/[│┃║┆┇┊┋╎╏╵╷╹╻]/.test(c)) return '|';
+    return '+';
+  }
+  if (n >= 0x2580 && n <= 0x259f) return '#';
+  if (n >= 0x25a0 && n <= 0x25ff) return '•';
+  if (n >= 0x2190 && n <= 0x21ff) return '->';
+  // Spinners (braille), zero-width marks, variation selectors, emoji, icon fonts.
+  if ((n >= 0x2800 && n <= 0x28ff) || n <= 0x206f || (n >= 0xfe00 && n <= 0xfe0f) || n > 0xffff || (n >= 0xe000 && n <= 0xf8ff)) return '';
+  return '*';
+}
+
+export function gameGlyphs(s) {
+  return String(s ?? '').replace(SYMBOLS, glyph);
+}
+
 // WoW treats "|" as an escape character; double it so text can't inject markup.
 export function escapeWow(s) {
-  return String(s ?? '').replace(/\|/g, '||');
+  return gameGlyphs(s).replace(/\|/g, '||');
 }
 
 function inline(line) {
