@@ -266,7 +266,7 @@ _G.C_GamePad = {
 Stub.slotCount = 600
 Stub.loadedSlots = {}
 _G.C_AddOns = {
-	GetAddOnMetadata = function(_, key) return key == "Version" and "0.4.2" or nil end,
+	GetAddOnMetadata = function(_, key) return key == "Version" and "0.4.3" or nil end,
 	DoesAddOnExist = function(name)
 		local n = tonumber(name:match("OrcaWow_S(%d+)"))
 		return n ~= nil and n <= Stub.slotCount

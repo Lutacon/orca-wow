@@ -24,7 +24,7 @@ import { markdownToWow, markdownToSpeech, firstLine, escapeWow } from './format.
 import { loadOrCreateKey, deriveKeys, open as openSealed, ENCRYPTED_VERSION } from './strip-crypto.js';
 import { STATE_DIR } from './paths.js';
 
-export const VERSION = '0.4.2';
+export const VERSION = '0.4.3';
 export { STATE_DIR };
 
 const sec = (iso) => (iso ? Math.floor(Date.parse(iso) / 1000) : undefined);

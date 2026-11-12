@@ -1,6 +1,6 @@
 {
   "name": "orca-wow",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Bridge between the OrcaWow addon for World of Warcraft: Forever and Orca's coding agents. Experimental.",
   "homepage": "https://github.com/Lutacon/orca-wow",
   "repository": {
