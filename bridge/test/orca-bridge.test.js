@@ -139,6 +139,9 @@ test('a request the game saw before it changed on screen is refused once, then a
   await b.refreshView(id, true);
   const pending = () => b.buildSnapshot().view.pending;
   assert.equal(pending().pc, true, 'no menu yet: the game can only say No');
+  // The thread's first change event can queue a paced re-read behind the one above;
+  // recheckWait leaves a read in flight alone, so let it finish first.
+  await waitFor(() => !b.views.get(id).inflight);
 
   // The menu appears; the thread row doesn't change. The periodic re-read picks it up.
   orca.screens.h1 = MENU;
