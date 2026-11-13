@@ -5,6 +5,9 @@ local _, ns = ...
 local UI = {}
 ns.UI = UI
 
+-- The copy shortcut in the game's edit boxes: Cmd+C in the Mac client.
+UI.COPY_KEYS = IsMacClient and IsMacClient() and "Cmd+C" or "Ctrl+C"
+
 function UI.Tooltip(owner, title, body)
 	owner:HookScript("OnEnter", function(self)
 		local tip = GetAppropriateTooltip and GetAppropriateTooltip() or GameTooltip
@@ -444,7 +447,7 @@ function UI.Glyph(key, size)
 end
 
 -- The game gives addons no clipboard, so copying shows the text in a box, already
--- selected: the player presses Ctrl+C. Typing in the box puts the text back.
+-- selected: the player presses Ctrl+C (Cmd+C on a Mac). Typing in the box puts the text back.
 local copyFrame
 function UI.ShowCopy(text)
 	text = ns.CopyableText(text)
@@ -486,7 +489,7 @@ function UI.ShowCopy(text)
 
 		f.Hint = UI.Text(f, "GameFontHighlightSmall", "LEFT")
 		f.Hint:SetPoint("BOTTOMLEFT", 14, 9)
-		f.Hint:SetText("Press Ctrl+C to copy the selected text. Drag over the text to copy only part of it.")
+		f.Hint:SetText("Press " .. UI.COPY_KEYS .. " to copy the selected text. Drag over the text to copy only part of it.")
 		f.Close = UI.Button(f, "Close", 100, function() f:Hide() end)
 		f.Close:SetPoint("BOTTOMRIGHT", -6, 4)
 		f.SelectAll = UI.Button(f, "Select all", 100, function() UI.SelectCopyText() end)
