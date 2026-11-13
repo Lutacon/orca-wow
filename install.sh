@@ -7,9 +7,9 @@
 # Options (after `bash -s --` when piping): --wow "/path/to/World of Warcraft" --slots N --no-service
 #
 # Copies the bridge and addon to ~/.local/share/orca-wow, puts `orca-wow` on your
-# PATH, then runs `orca-wow install`, which installs the addon into the game, gives
-# checks that Orca is there, starts it as a user service and walks you through the
-# first launch.
+# PATH, then runs `orca-wow install`, which installs the addon into the game, checks
+# that Orca is there, starts the bridge as a user service (a launchd agent on macOS)
+# and walks you through the first launch.
 set -euo pipefail
 
 repo="Lutacon/orca-wow"
@@ -71,8 +71,10 @@ if [[ ":$PATH:" != *":$bin:"* ]]; then
 fi
 
 # When piped from curl, stdin is this script; give the guided setup the keyboard.
+# ${1+"$@"} passes no arguments at all when there are none, which stays safe under
+# set -u in the bash 3.2 that macOS ships.
 if [[ ! -t 0 ]] && (: </dev/tty) 2>/dev/null; then
-  node "$dest/bridge/bin/orca-wow.js" install "$@" </dev/tty
+  node "$dest/bridge/bin/orca-wow.js" install ${1+"$@"} </dev/tty
 else
-  node "$dest/bridge/bin/orca-wow.js" install "$@"
+  node "$dest/bridge/bin/orca-wow.js" install ${1+"$@"}
 fi
