@@ -9,6 +9,9 @@ import path from 'node:path';
 
 export const APP = 'orca-wow';
 export const WINDOWS = process.platform === 'win32';
+// What the bridge calls the computer it runs on, in game and in its messages.
+export const THIS_COMPUTER = process.platform === 'darwin' ? 'this Mac' : 'this PC';
+export const THIS_COMPUTER_UC = THIS_COMPUTER[0].toUpperCase() + THIS_COMPUTER.slice(1);
 
 const home = os.homedir();
 const localAppData = () => process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
