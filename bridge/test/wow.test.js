@@ -13,6 +13,9 @@ const findWowInstalls = () => findAny({ platform: 'linux' });
 // The Wine-prefix tests fake a Linux home (HOME, symlinks); Windows takes its home
 // from USERPROFILE and needs admin rights for symlinks.
 const WINE_SKIP = process.platform === 'win32' && 'Wine prefixes are Linux only';
+// Battle.net's records on Windows hold drive-letter paths, which a temporary folder
+// elsewhere can't stand in for.
+const WIN_SKIP = process.platform !== 'win32' && 'Windows paths only';
 
 function touch(p, content = '') {
   fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -123,7 +126,7 @@ test("finds Forever on macOS from Battle.net's records and /Applications", () =>
   fs.rmSync(sys, { recursive: true, force: true });
 });
 
-test("finds Forever on Windows from Battle.net's records, its default folder, and the usual folders", () => {
+test("finds Forever on Windows from Battle.net's records, its default folder, and the usual folders", { skip: WIN_SKIP }, () => {
   const sys = fs.mkdtempSync(path.join(os.tmpdir(), 'orca-wow-win-'));
   const env = {
     ProgramData: path.join(sys, 'ProgramData'),
