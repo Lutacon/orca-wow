@@ -93,7 +93,8 @@ function resolveWowDir(args, cfg) {
   if (forever.length > 1) console.log(C.y(`Found several WoW: Forever installs, using the first (pick one with --wow):\n  ${forever.join('\n  ')}`));
   else if (origin[forever[0]] === 'scan' || origin[forever[0]] === 'records') {
     // Found by searching the drives, or in Battle.net's product.db (which every account on
-    // a Windows PC can change): say which folder, so a planted one doesn't go unnoticed.
+    // the computer can change, on Windows and on a Mac): say which folder, so a planted
+    // one doesn't go unnoticed.
     const how = origin[forever[0]] === 'scan' ? 'by searching the drives' : "in Battle.net's list of installs";
     console.log(C.y(`Using the WoW: Forever install found ${how}: ${forever[0]}\nIf that isn't the game you play, run the install again with --wow and your game's folder.`));
   }

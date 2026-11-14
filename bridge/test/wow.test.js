@@ -123,6 +123,14 @@ test("finds Forever on macOS from Battle.net's records and /Applications", () =>
   touch(path.join(sys, 'Users/Shared/Battle.net/Agent/product.db'), 'junk\x00\x12"/Volumes/Jeux Vidéo/World of Warcraft\x00wowf');
   touch(path.join(sys, 'Volumes/Jeux Vidéo/World of Warcraft/_forever_/World of Warcraft.app/Contents/Info.plist'));
   assert.deepEqual(mac().forever, [path.join(sys, 'Volumes/Jeux Vidéo/World of Warcraft/_forever_')]);
+
+  // Where each was found: product.db is open to every account on the Mac, so install
+  // says which folder it took from there.
+  touch(path.join(sys, 'Applications/World of Warcraft/_forever_/World of Warcraft.app/Contents/Info.plist'));
+  const r = mac();
+  assert.deepEqual(r.forever, [path.join(sys, 'Volumes/Jeux Vidéo/World of Warcraft/_forever_'), path.join(sys, 'Applications/World of Warcraft/_forever_')]);
+  assert.equal(r.origin[r.forever[0]], 'records');
+  assert.equal(r.origin[r.forever[1]], 'default');
   fs.rmSync(sys, { recursive: true, force: true });
 });
 
