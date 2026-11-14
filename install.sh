@@ -71,10 +71,8 @@ if [[ ":$PATH:" != *":$bin:"* ]]; then
 fi
 
 # When piped from curl, stdin is this script; give the guided setup the keyboard.
-# ${1+"$@"} passes no arguments at all when there are none, which stays safe under
-# set -u in the bash 3.2 that macOS ships.
 if [[ ! -t 0 ]] && (: </dev/tty) 2>/dev/null; then
-  node "$dest/bridge/bin/orca-wow.js" install ${1+"$@"} </dev/tty
+  node "$dest/bridge/bin/orca-wow.js" install "$@" </dev/tty
 else
-  node "$dest/bridge/bin/orca-wow.js" install ${1+"$@"}
+  node "$dest/bridge/bin/orca-wow.js" install "$@"
 fi
