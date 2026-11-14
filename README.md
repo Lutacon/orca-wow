@@ -1,6 +1,6 @@
 # Orca for World of Warcraft
 
-See and control your [Orca](https://github.com/stablyai/orca) agents (Claude Code, Codex and others, each in its own git worktree) without leaving **World of Warcraft: Forever**, on Windows (and, not tested yet, on a Mac).
+See and control your [Orca](https://github.com/stablyai/orca) agents (Claude Code, Codex and others, each in its own git worktree) without leaving **World of Warcraft: Forever**, on Windows (and on a Mac, not yet tested with the game running).
 
 This is a fork of [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow). This fork adds Windows support and connects the addon to Orca.
 
@@ -56,9 +56,9 @@ Options: `--wow "D:\Games\World of Warcraft"`, `--slots N` and `--no-service` (t
 
 Linux: the original project's `./install.sh` is still here, but this fork hasn't tested it there. For a Mac, see the next section.
 
-## On a Mac (not tested yet)
+## On a Mac (not yet tested with the game)
 
-The bridge and the addon also run on macOS, with the game's native Mac client and Orca on the same Mac. This part comes from the original project and was brought up to date for Orca, but it hasn't been tried on a real Mac with this fork yet: if you do, please report what happened.
+The bridge and the addon also run on macOS, with the game's native Mac client and Orca on the same Mac. This part comes from the original project and was brought up to date for Orca. On a Mac (macOS 26), the installer, the bridge's link to Orca and the Screen Recording permission have been checked, but not yet with the game running: if you play this way, please report what happened.
 
 You need macOS 11 or newer, **World of Warcraft: Forever** installed from Battle.net, and Orca open on the same Mac.
 
