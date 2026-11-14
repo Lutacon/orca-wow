@@ -259,12 +259,27 @@ async function kwinCapture(method, signature, args, options, timeout = 4000) {
 }
 
 export const SCREEN_PERMISSION_HELP =
-  `macOS hasn't let the bridge record the screen. Open System Settings > Privacy & Security > Screen & System Audio Recording, turn on ${path.basename(process.execPath)} (${process.execPath}), then restart the bridge with: launchctl kickstart -k gui/${uid()}/orca-wow`;
+  `macOS hasn't let the bridge record the screen. Open System Settings > Privacy & Security > Screen & System Audio Recording (Screen Recording before macOS 15), turn on ${path.basename(process.execPath)} (${process.execPath}), then restart the bridge with: launchctl kickstart -k gui/${uid()}/orca-wow`;
+
+// Whether macOS lets the bridge record the screen, asked without showing a prompt:
+// true, false, or null when it can't tell (an older macOS, osascript failing).
+// Without the permission, screencapture can still succeed with the desktop alone (no
+// other app's windows in it), so the strip would just never show up.
+const MAC_PREFLIGHT_JXA = "ObjC.import('CoreGraphics'); ObjC.bindFunction('CGPreflightScreenCaptureAccess', ['bool', []]); String($.CGPreflightScreenCaptureAccess())";
+
+async function macScreenAccess() {
+  try {
+    const out = (await run('osascript', ['-l', 'JavaScript', '-e', MAC_PREFLIGHT_JXA])).toString('utf8').trim();
+    return out === 'true' ? true : out === 'false' ? false : null;
+  } catch {
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 
 export class StripCapture {
-  constructor({ log = () => {}, backend = 'auto', region = null } = {}) {
+  constructor({ log = () => {}, backend = 'auto', region = null, screenAccess = macScreenAccess } = {}) {
     this.log = log;
     this.backend = backend;
     this.manualRegion = region; // { x, y, width, height } in compositor (logical) coordinates
@@ -275,6 +290,8 @@ export class StripCapture {
     this.lastImage = null;
     this.winCache = null; // { pid, at, win }: window lookups cost an osascript run or several D-Bus calls
     this.macAsked = false;
+    this.screenAccess = screenAccess;
+    this.macAccess = { ok: null, at: 0 }; // the last answer from screenAccess
     this.tmpDir = null;
   }
 
@@ -327,6 +344,24 @@ export class StripCapture {
     run('osascript', ['-l', 'JavaScript', '-e', js], { timeout: 60000 }).catch(() => {});
   }
 
+  // Whether to capture on macOS: asked before each capture until macOS says yes, at
+  // most every 5 seconds while it says no. A yes (or "can't tell") is kept; if the
+  // permission is turned off later, screencapture's own error counts as a no.
+  async macAllowed() {
+    const a = this.macAccess;
+    if (a.ok === true) return true;
+    if (a.ok === false && Date.now() - a.at < 5000) return false;
+    const ok = (await this.screenAccess()) !== false;
+    this.macAccess = { ok, at: Date.now() };
+    return ok;
+  }
+
+  async checkMacAccess() {
+    if (await this.macAllowed()) return;
+    this.requestScreenAccess();
+    throw new Error(SCREEN_PERMISSION_HELP);
+  }
+
   // On macOS, ask for Screen Recording up front (at bridge start) so the prompt shows
   // before the game does. macOS only prompts when the permission is missing. Elsewhere
   // there's nothing to ask.
@@ -347,6 +382,7 @@ export class StripCapture {
       return fs.readFileSync(file);
     } catch (err) {
       if (/could not create image/i.test(`${err.stderr || ''}${err.message}`)) {
+        this.macAccess = { ok: false, at: Date.now() };
         this.requestScreenAccess();
         throw new Error(SCREEN_PERMISSION_HELP);
       }
@@ -371,6 +407,7 @@ export class StripCapture {
       return res;
     }
     if (backend === 'macos') {
+      await this.checkMacAccess();
       let region = this.manualRegion;
       let scale = 1;
       let searchY = 0;
@@ -471,6 +508,7 @@ export class StripCapture {
       return { data: encodePNG(image), name: name.replace(/\.jpg$/, '.png'), mime: 'image/png' };
     }
     if (backend === 'macos') {
+      await this.checkMacAccess();
       const win = await this.macWindow(wowPid);
       // screencapture copies a rectangle of the screen, so a hidden game would attach
       // whatever is showing there instead.

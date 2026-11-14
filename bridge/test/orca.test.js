@@ -62,6 +62,10 @@ test('readRuntime takes the transports list or the older single transport', () =
   assert.equal(readRuntime(dir).transport.endpoint, '\\\\.\\pipe\\o');
   fs.writeFileSync(file, JSON.stringify({ runtimeId: 'r', pid: 1, transport: { kind: 'unix', endpoint: '/tmp/o.sock' }, authToken: 't', startedAt: 1 }));
   assert.equal(readRuntime(dir).transport.endpoint, '/tmp/o.sock');
+  // What Orca 1.4 writes on macOS: its unix socket sits in its user data folder.
+  const sock = '/Users/me/Library/Application Support/orca/o-4242-a1b2.sock';
+  fs.writeFileSync(file, JSON.stringify({ runtimeId: 'r', pid: 4242, transports: [{ kind: 'unix', endpoint: sock }, { kind: 'websocket', endpoint: 'ws://127.0.0.1:6768' }], authToken: 't', startedAt: 1 }));
+  assert.deepEqual(readRuntime(dir).transport, { kind: 'unix', endpoint: sock });
   fs.rmSync(file);
   assert.throws(() => readRuntime(dir), { code: 'ENOENT' });
   fs.rmSync(dir, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 # Orca for World of Warcraft
 
-See and control your [Orca](https://github.com/stablyai/orca) agents (Claude Code, Codex and others, each in its own git worktree) without leaving **World of Warcraft: Forever**, on Windows.
+See and control your [Orca](https://github.com/stablyai/orca) agents (Claude Code, Codex and others, each in its own git worktree) without leaving **World of Warcraft: Forever**, on Windows (and on a Mac, not yet tested with the game running).
 
 This is a fork of [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow). This fork adds Windows support and connects the addon to Orca.
 
@@ -13,7 +13,7 @@ This is a fork of [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code
 - **Start a new worktree** in any Orca repo, picking the agent (Claude, Codex, OpenCode and others), the worktree name and the base branch, with your prompt. **Mark as done** or **sleep** its worktree.
 - **Several Orcas at once**: the one on this PC and those on other computers on your network, such as a MacBook. See "Orca on another computer" below.
 - Notices when an agent finishes or asks for something: a toast, a sound, a line in chat and a section in the objective tracker. They wait until you leave combat.
-- Replies read aloud with the Windows voice. Controller support.
+- Replies read aloud with the system voice. Controller support.
 
 ## Getting started
 
@@ -54,7 +54,35 @@ Options: `--wow "D:\Games\World of Warcraft"`, `--slots N` and `--no-service` (t
 
 **Uninstall:** `orca-wow uninstall`.
 
-Linux and macOS: the original project's `./install.sh` is still here, but this fork has only been tested on Windows.
+Linux: the original project's `./install.sh` is still here, but this fork hasn't tested it there. For a Mac, see the next section.
+
+## On a Mac (not yet tested with the game)
+
+The bridge and the addon also run on macOS, with the game's native Mac client and Orca on the same Mac. This part comes from the original project and was brought up to date for Orca. On a Mac (macOS 26), the installer, the bridge's link to Orca and the Screen Recording permission have been checked, but not yet with the game running: if you play this way, please report what happened.
+
+You need macOS 11 or newer, **World of Warcraft: Forever** installed from Battle.net, and Orca open on the same Mac.
+
+1. **Install Node.js 22 or newer**, for example with `brew install node`.
+2. **Install [Orca](https://github.com/stablyai/orca) and open it.** The bridge finds it by itself: Orca writes where to reach it to `~/Library/Application Support/orca/orca-runtime.json` each time it starts.
+3. **Close the game** and run this in Terminal:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/Lutacon/orca-wow/main/install.sh | bash
+   ```
+   Or run `./install.sh` from a clone. It copies the bridge and the addon to `~/.local/share/orca-wow`, links `orca-wow` into `~/.local/bin`, installs the addon in `_forever_/Interface/AddOns`, and starts the bridge as a launch agent (`~/Library/LaunchAgents/orca-wow.plist`) that starts again each time you log in. If it can't find the game, add `--wow "/Applications/World of Warcraft"` (when piping from curl: `| bash -s -- --wow "/Applications/World of Warcraft"`).
+4. **Allow Screen Recording.** The bridge reads the game's pixels, so macOS asks whether `node` may record the screen. Turn it on in **System Settings → Privacy & Security → Screen & System Audio Recording** (Screen Recording before macOS 15). If you missed the prompt, `orca-wow status` says which `node` to turn on. Then restart the bridge:
+   ```bash
+   launchctl kickstart -k gui/$(id -u)/orca-wow
+   ```
+   The permission belongs to that copy of Node, so after `brew upgrade node` macOS may ask again. If you run the bridge yourself in Terminal (`orca-wow run`), macOS asks about Terminal instead.
+5. **Start the game and log in.** Everything in game works as on Windows.
+
+What's different from Windows:
+
+- The bridge's settings are in `~/.config/orca-wow`, and its log in `~/.local/state/orca-wow/bridge.log`.
+- The installer doesn't lock the addon's folders to your account, as it does on Windows. If other people have accounts on this Mac, check that they can't write to the game's AddOns folder.
+- The game window must be on screen, in the Space you're in. A minimized game, or one in another Space, can't be read.
+- In the copy box, press Cmd+C. Replies are read aloud with macOS's `say`. Dictation isn't available.
+- If `~/.local/bin` isn't on your PATH, run the commands as `~/.local/bin/orca-wow`.
 
 ## Orca on another computer (for example a MacBook)
 

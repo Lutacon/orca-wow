@@ -390,7 +390,7 @@ function M:CreateButtonBar(f)
 
 	bar.Copy = UI.IconButton(f, "Interface\\Buttons\\UI-GuildButton-PublicNote-Up", 26, nil, function() M:CopyLatest() end)
 	bar.Copy:SetPoint("LEFT", bar.Shot, "RIGHT", 6, 0)
-	UI.Tooltip(bar.Copy, "Copy the latest reply", "Opens the agent's latest reply in a box where you can copy it with Ctrl+C. Each message also has its own copy button, next to its time.")
+	UI.Tooltip(bar.Copy, "Copy the latest reply", "Opens the agent's latest reply in a box where you can copy it with " .. UI.COPY_KEYS .. ". Each message also has its own copy button, next to its time.")
 	UI.Tooltip(bar.Speak, nil, "Read the latest reply aloud.")
 
 	bar.Send = UI.Button(f, "Send", 110, function() M:Send() end)

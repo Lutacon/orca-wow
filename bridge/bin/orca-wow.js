@@ -11,7 +11,7 @@ import { findWowInstalls, addonsDir as addonsDirOf, findWowProcess } from '../sr
 import { SlotBank, ADDON, CTL_LONG, atomicWrite, checkFolder } from '../src/slots.js';
 import { StripCapture, SCREEN_PERMISSION_HELP } from '../src/capture.js';
 import { decodeImage } from '../src/codec.js';
-import { CONFIG_DIR, DATA_DIR, WINDOWS } from '../src/paths.js';
+import { CONFIG_DIR, DATA_DIR, WINDOWS, THIS_COMPUTER, THIS_COMPUTER_UC } from '../src/paths.js';
 import { windowsStartup, NO_RESTART_EXIT } from '../src/winservice.js';
 import { secureAddonFolders, topFolders, folderProblems } from '../src/winacl.js';
 import { readRuntime as readOrcaRuntime } from '../src/orca.js';
@@ -93,7 +93,8 @@ function resolveWowDir(args, cfg) {
   if (forever.length > 1) console.log(C.y(`Found several WoW: Forever installs, using the first (pick one with --wow):\n  ${forever.join('\n  ')}`));
   else if (origin[forever[0]] === 'scan' || origin[forever[0]] === 'records') {
     // Found by searching the drives, or in Battle.net's product.db (which every account on
-    // a Windows PC can change): say which folder, so a planted one doesn't go unnoticed.
+    // the computer can change, on Windows and on a Mac): say which folder, so a planted
+    // one doesn't go unnoticed.
     const how = origin[forever[0]] === 'scan' ? 'by searching the drives' : "in Battle.net's list of installs";
     console.log(C.y(`Using the WoW: Forever install found ${how}: ${forever[0]}\nIf that isn't the game you play, run the install again with --wow and your game's folder.`));
   }
@@ -486,14 +487,14 @@ function cmdStatus(args) {
     // One line per Orca: this PC's and each paired with `orca-wow remote add`.
     // Errors and addresses can carry another computer's text: print it plain.
     for (const e of envs) {
-      const where = e.local ? 'this PC' : plainText(e.origin || 'remote');
+      const where = e.local ? THIS_COMPUTER : plainText(e.origin || 'remote');
       const label = plainText(e.label);
       console.log(`${ok(e.state === 'connected')} Orca ${e.local ? '' : `on ${label}`}${e.local ? `(${label})` : ''}: ${plainText(e.state)}${e.error ? ` — ${plainText(e.error)}` : ''} ${C.d(`(${e.threads} agents, ${where})`)}`);
     }
   } else {
     console.log(`${ok(st.orca.state === 'connected')} Orca: ${plainText(st.orca.state)}${st.orca.error ? ` — ${plainText(st.orca.error)}` : ''} ${C.d(`(${st.orca.threads} agents, ${plainText(st.orca.origin || '?')})`)}`);
   }
-  if (!envs.some((e) => e.local)) console.log(C.d("  This PC's own Orca is hidden (orca-wow local on shows it again)."));
+  if (!envs.some((e) => e.local)) console.log(C.d(`  ${THIS_COMPUTER_UC}'s own Orca is hidden (orca-wow local on shows it again).`));
   console.log(`${ok(!!st.wow)} WoW: ${st.wow ? `running (pid ${st.wow.pid})` : 'not running'}`);
   console.log(`${ok(st.capture.state === 'ok' || st.capture.state === 'idle')} Screen link: ${st.capture.state} via ${st.capture.backend} ${C.d(`(${st.capture.decoded} frames read, ${st.capture.rejected} rejected)`)}${st.capture.lastError ? `\n    ${C.y(st.capture.lastError)}` : ''}`);
   if (st.addon) {
@@ -591,7 +592,7 @@ async function cmdUninstall(args) {
 
   // An access link stays valid on the computer that made it until it's revoked there.
   for (const r of cfg.orca?.remotes || []) {
-    warn(`Revoke this PC's access on ${plainText(String(r.label || r.code))}: in its Orca, Settings → Remote Orca Servers → Shared Server Access.`);
+    warn(`Revoke ${THIS_COMPUTER}'s access on ${plainText(String(r.label || r.code))}: in its Orca, Settings → Remote Orca Servers → Shared Server Access.`);
   }
 
   fs.rmSync(CONFIG_DIR, { recursive: true, force: true });
@@ -747,7 +748,7 @@ async function cmdRemote(args) {
   const cfg = readConfig();
   const orca = orcaConfig(cfg);
   if (sub === 'list') {
-    console.log(`${C.b('This PC')} ${orca.local === false ? C.d('hidden (orca-wow local on)') : C.d('shown')}`);
+    console.log(`${C.b(THIS_COMPUTER_UC)} ${orca.local === false ? C.d('hidden (orca-wow local on)') : C.d('shown')}`);
     if (!orca.remotes.length) {
       console.log(C.d(`No other computers yet. Add one with orca-wow remote add <name>, and paste its access link when asked.\n${PAIR_HELP}`));
       return;
@@ -792,7 +793,7 @@ async function cmdRemote(args) {
       if (!p.ok) {
         const hints =
           p.code === 'unreachable' || p.code === 'timeout' || p.code === 'closed'
-            ? `\nCheck that the other computer is awake with Orca open, on the same network as this PC, and that its firewall lets Orca accept incoming connections (macOS asks the first time; System Settings > Network > Firewall > Options). Nothing was saved; add --no-check to save it anyway.`
+            ? `\nCheck that the other computer is awake with Orca open, on the same network as ${THIS_COMPUTER}, and that its firewall lets Orca accept incoming connections (macOS asks the first time; System Settings > Network > Firewall > Options). Nothing was saved; add --no-check to save it anyway.`
             : '\nNothing was saved.';
         throw new Error(`${plainText(p.error)}${hints}`);
       }
@@ -822,7 +823,7 @@ async function cmdRemote(args) {
     writeConfig(cfg);
     restartBridge();
     const label = plainText(r.label);
-    console.log(`${C.g('✓')} Removed ${label} from this PC.`);
+    console.log(`${C.g('✓')} Removed ${label} from ${THIS_COMPUTER}.`);
     console.log(C.y(`! Its access link still works until you revoke it on ${label}: in its Orca, Settings > Remote Orca Servers > Shared Server Access.`));
     return;
   }
@@ -834,7 +835,7 @@ function cmdLocal(args) {
   const cfg = readConfig();
   const orca = orcaConfig(cfg);
   if (!sub) {
-    console.log(`This PC's Orca is ${orca.local === false ? 'hidden' : 'shown'} in game ${C.d('(orca-wow local on|off)')}`);
+    console.log(`${THIS_COMPUTER_UC}'s Orca is ${orca.local === false ? 'hidden' : 'shown'} in game ${C.d('(orca-wow local on|off)')}`);
     return;
   }
   if (sub !== 'on' && sub !== 'off') throw new Error('usage: orca-wow local on|off');
@@ -842,7 +843,7 @@ function cmdLocal(args) {
   if (!orca.local && !orca.remotes.length) console.log(C.y('! No other computer is added yet, so the game will show no agents. Add one with orca-wow remote add.'));
   writeConfig(cfg);
   restartBridge();
-  console.log(`${C.g('✓')} This PC's Orca is ${orca.local ? 'shown' : 'hidden'} in game.`);
+  console.log(`${C.g('✓')} ${THIS_COMPUTER_UC}'s Orca is ${orca.local ? 'shown' : 'hidden'} in game.`);
 }
 
 // Claude Code and Codex run a message that starts with "!" as a shell command, without
@@ -890,7 +891,7 @@ function help() {
   orca-wow remote remove <name>
                      Stop showing that computer's Orca and forget its pairing (then
                      revoke it there: Settings > Remote Orca Servers > Shared Server Access)
-  orca-wow local on|off  Show this PC's own Orca in game too (on by default)
+  orca-wow local on|off  Show ${THIS_COMPUTER}'s own Orca in game too (on by default)
   orca-wow shell on|off  Let messages from the game that start with "!" reach the agents,
                      which run them as shell commands without asking (off by default)
   orca-wow probe         Capture the corner of the game window and try to read the strip
