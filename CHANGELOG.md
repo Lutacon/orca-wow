@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.4
 
 - macOS: the README now has steps for running the game, Orca and the bridge on the same Mac. Tested on one Mac so far.
 - On a Mac, the bridge asks macOS whether it may record the screen before it reads the game, instead of reading a screen without the game in it and never finding the addon. Until you allow it, `orca-wow status` and the installer say which `node` to turn on under Screen Recording.
