@@ -529,8 +529,8 @@ async function cmdProbe() {
   const dec = decodeImage(img, null, { searchY: res.searchY });
   console.log(`captured ${img.width}x${img.height} -> ${png}`);
   if (!dec) console.log('no strip visible (open the OrcaWow window in game, or send something)');
-  else if (dec.error) console.log(`strip found but unreadable: ${dec.error} (cell ${dec.geo.cell}px at ${dec.geo.ox},${dec.geo.oy})`);
-  else console.log(`strip decoded: seq ${dec.seq}, ${dec.payload.length} bytes, cell ${dec.geo.cell}px at ${dec.geo.ox},${dec.geo.oy}`);
+  else if (dec.error) console.log(`strip found but unreadable: ${dec.error} (cell ${+(dec.geo.pitch ?? dec.geo.cell).toFixed(2)}px at ${dec.geo.ox},${dec.geo.oy})`);
+  else console.log(`strip decoded: seq ${dec.seq}, ${dec.payload.length} bytes, cell ${+(dec.geo.pitch ?? dec.geo.cell).toFixed(2)}px at ${dec.geo.ox},${dec.geo.oy}`);
 }
 
 async function ask(question) {
