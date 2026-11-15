@@ -217,6 +217,7 @@ _G.debugprofilestop = function() return os.clock() * 1000 end
 _G.geterrorhandler = function() return function(e) error(e, 2) end end
 _G.InCombatLockdown = function() return false end
 _G.IsShiftKeyDown = function() return false end
+_G.IsMacClient = function() return Stub.mac or false end
 _G.PlaySound = function(id) table.insert(Stub.sounds, id) end
 _G.StopSound = noop
 _G.ReloadUI = function() Stub.reloaded = true end

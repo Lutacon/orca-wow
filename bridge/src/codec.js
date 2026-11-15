@@ -116,8 +116,16 @@ function readCells(img, geo, start, n) {
 }
 
 const HEADER_CELLS = cellsForBytes(HEADER_BYTES);
+// The first cells hold only magic bits, so they're the same in every frame.
+const MAGIC_CELLS = bytesToCells(MAGIC).slice(0, Math.floor((MAGIC.length * 8) / BITS));
 
 function headerAt(img, geo) {
+  // Most places fail on the first cell; checking it alone keeps the search cheap while
+  // no strip is on screen, which is most of the time.
+  const p = geo.pitch ?? geo.cell;
+  for (let k = 0; k < MAGIC_CELLS.length; k++) {
+    if (cellValueAt(img, geo.ox + Math.floor(k * p + p / 2), geo.oy + Math.floor(p / 2)) !== MAGIC_CELLS[k]) return null;
+  }
   const cells = readCells(img, geo, 0, HEADER_CELLS);
   if (!cells) return null;
   const b = cellsToBytes(cells, HEADER_BYTES);
@@ -125,36 +133,61 @@ function headerAt(img, geo) {
   return { version: b[2], seq: (b[3] << 8) | b[4], len: (b[5] << 8) | b[6] };
 }
 
-// Find the strip. Tries the last known geometry first, then searches cell sizes and
-// small offsets (a window border or misaligned capture shifts the origin a little).
-// `searchY` widens the vertical search, for captures that start above the game's
-// content (a macOS title bar).
-export function locate(img, hint, { searchY = 0 } = {}) {
-  if (hint && headerAt(img, hint)) return hint;
-  for (let cell = 2; cell <= 8; cell++) {
-    for (let oy = 0; oy <= cell * 3 + searchY; oy++) {
-      for (let ox = 0; ox <= cell * 3; ox++) {
-        const geo = { ox, oy, cell };
-        if (headerAt(img, geo)) return geo;
-      }
+// The first place a header reads at this cell spacing, trying small offsets (a window
+// border or misaligned capture shifts the origin a little). `searchY` widens the
+// vertical search, for captures that start above the game's content (a macOS title bar,
+// or the notch on a MacBook).
+function firstHeader(img, cell, pitch, searchY) {
+  const reach = Math.ceil(pitch * 3);
+  for (let oy = 0; oy <= reach + searchY; oy++) {
+    for (let ox = 0; ox <= reach; ox++) {
+      const geo = pitch === cell ? { ox, oy, cell } : { ox, oy, cell, pitch };
+      if (headerAt(img, geo)) return geo;
     }
   }
   return null;
 }
 
-// Returns { version, seq, payload (Buffer), geo } or { error, geo } or null when no strip is visible.
-export function decodeImage(img, hint, opts) {
-  const geo = locate(img, hint, opts);
-  if (!geo) return null;
-  const head = headerAt(img, geo);
-  if (head.len > MAX_PAYLOAD) return { error: 'bad length', geo };
-  const total = HEADER_BYTES + head.len + 2;
-  let out = readFrame(img, geo, head, total);
-  if (out.error === 'checksum mismatch') out = refinePitch(img, geo, head, total) || out;
-  return out;
+// Where the strip may be: the last known geometry, then whole-pixel cell sizes, then
+// the spacings between them. A Mac whose display isn't at its native resolution (More
+// Space, say) scales the game's picture: the addon's 3px squares, drawn at the panel's
+// 3024 pixels, land 3.57px apart in a 3600-pixel capture. Spacings 2% apart are close
+// enough to read the header; readAt then finds the exact one.
+function* headerSpots(img, hint, searchY) {
+  if (hint && headerAt(img, hint)) yield hint;
+  for (let cell = 2; cell <= 8; cell++) {
+    const geo = firstHeader(img, cell, cell, searchY);
+    if (geo) yield geo;
+  }
+  for (let p = 2; p < 8; p *= 1.02) {
+    const geo = firstHeader(img, Math.round(p), p, searchY);
+    if (geo) yield geo;
+  }
 }
 
-function readFrame(img, geo, head, total) {
+// Returns { version, seq, payload (Buffer), geo } or { error, geo } or null when no strip is visible.
+// A header alone doesn't settle where the strip is (a spacing a little off still reads
+// its first cells), so keep looking until a whole frame passes its checksum.
+export function decodeImage(img, hint, { searchY = 0 } = {}) {
+  let failed = null;
+  for (const geo of headerSpots(img, hint, searchY)) {
+    const out = readAt(img, geo);
+    if (!out.error) return out;
+    failed ??= out;
+  }
+  return failed;
+}
+
+function readAt(img, geo) {
+  const out = readFrame(img, geo);
+  return out.error && out.error !== 'strip clipped by capture region' ? refinePitch(img, geo) || out : out;
+}
+
+function readFrame(img, geo) {
+  const head = headerAt(img, geo);
+  if (!head) return { error: 'no header', geo };
+  if (head.len > MAX_PAYLOAD) return { error: 'bad length', geo };
+  const total = HEADER_BYTES + head.len + 2;
   const cells = readCells(img, geo, 0, cellsForBytes(total));
   if (!cells) return { error: 'strip clipped by capture region', geo };
   const bytes = cellsToBytes(cells, total);
@@ -164,14 +197,14 @@ function readFrame(img, geo, head, total) {
 }
 
 // The squares drift when the cell spacing isn't a whole number of pixels. Try spacings
-// within 2% of the whole-pixel size and keep the middle of the range that reads
-// cleanly, so the next frame (and longer ones) have the most margin either side.
-function refinePitch(img, geo, head, total) {
+// within 2% of this one, reading the header again at each (its length may have been
+// misread), and keep the middle of the range that reads cleanly, so the next frame
+// (and longer ones) have the most margin either side.
+function refinePitch(img, geo) {
+  const base = geo.pitch ?? geo.cell;
   const ok = [];
-  for (let p = geo.cell * 0.98; p <= geo.cell * 1.02; p += geo.cell / 1000) {
-    const g = { ox: geo.ox, oy: geo.oy, cell: geo.cell, pitch: p };
-    if (!headerAt(img, g)) continue;
-    const out = readFrame(img, g, head, total);
+  for (let p = base * 0.98; p <= base * 1.02; p += base / 1000) {
+    const out = readFrame(img, { ox: geo.ox, oy: geo.oy, cell: geo.cell, pitch: p });
     if (!out.error) ok.push(out);
   }
   return ok.length ? ok[Math.floor(ok.length / 2)] : null;

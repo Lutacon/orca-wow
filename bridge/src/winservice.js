@@ -21,9 +21,10 @@ const SYSTEM32 = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
 
 const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-// conhost's command line; the task starts it in the script's folder.
+// conhost's command line; the task starts it in the script's folder. Task paths are
+// Windows paths (path.win32), so the tests give the same result on any system.
 export function taskArguments(scriptFile) {
-  return `--headless cmd.exe /d /c .\\${path.basename(scriptFile)}`;
+  return `--headless cmd.exe /d /c .\\${path.win32.basename(scriptFile)}`;
 }
 
 // The exit code of a bridge that won't run until OrcaWow is installed again (its
@@ -94,7 +95,7 @@ export function taskXml(scriptFile) {
     <Exec>
       <Command>${xml(path.join(SYSTEM32, 'conhost.exe'))}</Command>
       <Arguments>${xml(taskArguments(scriptFile))}</Arguments>
-      <WorkingDirectory>${xml(path.dirname(scriptFile))}</WorkingDirectory>
+      <WorkingDirectory>${xml(path.win32.dirname(scriptFile))}</WorkingDirectory>
     </Exec>
   </Actions>
 </Task>

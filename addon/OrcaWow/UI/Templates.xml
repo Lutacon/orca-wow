@@ -8,7 +8,7 @@
 		</KeyValues>
 	</Frame>
 
-	<!-- The copy box: holds text selected for Ctrl+C (the game gives addons no clipboard). -->
+	<!-- The copy box: holds text selected for Ctrl+C or Cmd+C (the game gives addons no clipboard). -->
 	<Frame name="OrcaWowCopyBoxTemplate" inherits="ScrollingEditBoxTemplate" virtual="true">
 		<KeyValues>
 			<KeyValue key="maxLetters" value="10000" type="number"/>

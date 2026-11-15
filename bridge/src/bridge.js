@@ -1044,7 +1044,7 @@ export class Bridge {
       this.log(`OrcaWow's folder was replaced and couldn't be set up again: ${e.message}`);
       return false;
     }
-    this.log('OrcaWow\'s folder was replaced (an addon manager updating it?): locked it to this account again and put the update bells back.');
+    this.log(`OrcaWow's folder was replaced (an addon manager updating it?): ${this.secureFolders ? 'locked it to this account again and put' : 'put'} the update bells back.`);
     return true;
   }
 

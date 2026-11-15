@@ -166,26 +166,36 @@ function linuxInstalls() {
 
 // macOS: Battle.net records install paths as plain paths in product.db, and its
 // default install folder in Battle.net.config. `system` stands in for / in tests.
+// product.db is in /Users/Shared/Battle.net, which Battle.net leaves open to every
+// account on the Mac, so `origin` marks what came from it ('records'), as on Windows.
 function macInstalls(system = '/') {
   const home = os.homedir();
   const sys = (p) => path.join(system, p);
   const dirs = [];
+  const from = new Map();
+  const add = (d, source) => {
+    if (dirs.includes(d)) return;
+    dirs.push(d);
+    from.set(d, source);
+  };
   const shared = sys('Users/Shared/Battle.net');
   try {
     const db = fs.readFileSync(path.join(shared, 'Agent/product.db'), 'latin1');
-    for (const m of db.matchAll(/\/[^\x00-\x1f"]*?World of Warcraft(?=[\x00-\x1f"]|$)/g)) dirs.push(sys(Buffer.from(m[0], 'latin1').toString('utf8')));
+    for (const m of db.matchAll(/\/[^\x00-\x1f"]*?World of Warcraft(?=[\x00-\x1f"]|$)/g)) add(sys(Buffer.from(m[0], 'latin1').toString('utf8')), 'records');
   } catch {}
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(home, 'Library/Application Support/Battle.net/Battle.net.config'), 'utf8'));
     const base = cfg.Client.Install.DefaultInstallPath;
-    if (base) dirs.push(path.join(system, base, 'World of Warcraft'));
+    if (base) add(path.join(system, base, 'World of Warcraft'), 'config');
   } catch {}
-  dirs.push(sys('Applications/World of Warcraft'), path.join(home, 'Applications/World of Warcraft'));
+  add(sys('Applications/World of Warcraft'), 'default');
+  add(path.join(home, 'Applications/World of Warcraft'), 'default');
   const forever = [];
   const wowOnly = [];
   classify(dirs, forever, wowOnly, 'darwin');
+  const origin = Object.fromEntries(forever.map((f) => [f, from.get(path.dirname(f))]));
   const battlenet = [sys('Applications/Battle.net.app'), path.join(home, 'Applications/Battle.net.app'), shared].filter((p) => fs.existsSync(p));
-  return { forever, wowOnly, prefixes: battlenet };
+  return { forever, wowOnly, prefixes: battlenet, origin };
 }
 
 // Windows: the game runs natively. Battle.net records install folders in product.db
@@ -241,7 +251,7 @@ function windowsInstalls(env = process.env, drives = windowsDrives()) {
 }
 
 // { forever: [...WoW: Forever folders], wowOnly: [...WoW installs without Forever], prefixes: [...where Battle.net is],
-//   origin: { [Forever folder]: where it was found (Windows only) } }
+//   origin: { [Forever folder]: where it was found (Windows and macOS) } }
 export function findWowInstalls({ platform = process.platform, system, env, drives } = {}) {
   const { forever, wowOnly, prefixes, origin = {} } =
     platform === 'darwin' ? macInstalls(system) : platform === 'win32' ? windowsInstalls(env, drives) : linuxInstalls();

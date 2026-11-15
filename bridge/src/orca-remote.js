@@ -60,7 +60,7 @@ import { gunzipSync } from 'node:zlib';
 import fs from 'node:fs';
 import path from 'node:path';
 import { OrcaRpcError } from './orca.js';
-import { CONFIG_DIR } from './paths.js';
+import { CONFIG_DIR, THIS_COMPUTER } from './paths.js';
 
 const nacl = createRequire(import.meta.url)('../vendor/tweetnacl/nacl-fast.js');
 export { nacl };
@@ -632,7 +632,7 @@ export class PairedSocket {
         return;
       }
       const code = reply?.type === 'e2ee_error' ? reply.error?.code : null;
-      if (code === 'unauthorized' || code === 'device_revoked') throw remoteError('unauthorized', `Orca on ${this.label} no longer accepts this PC's access link`);
+      if (code === 'unauthorized' || code === 'device_revoked') throw remoteError('unauthorized', `Orca on ${this.label} no longer accepts ${THIS_COMPUTER}'s access link`);
       // Hosts that predate capabilities on v2 token auth answer bad_auth. That answer
       // is sealed with keys only the pinned host has, so the host itself asked for
       // legacy (unlike a close before the ready, which anyone on the path can send).
@@ -674,7 +674,7 @@ export class PairedSocket {
     if (stage === 'open') return;
     if (stage === 'connect') return this.finishOpen?.(remoteError('unreachable', `Can't reach Orca on ${this.label}`));
     if (code === 4001 && stage === 'ready-wait' && this.framing === 'v2') return this.finishOpen?.(remoteError('v2_refused', 'v2 hello refused'));
-    if (code === 4001 && stage === 'auth-wait') return this.finishOpen?.(remoteError('unauthorized', `Orca on ${this.label} no longer accepts this PC's access link`));
+    if (code === 4001 && stage === 'auth-wait') return this.finishOpen?.(remoteError('unauthorized', `Orca on ${this.label} no longer accepts ${THIS_COMPUTER}'s access link`));
     if (code === 1013) return this.finishOpen?.(remoteError('busy', `Orca on ${this.label} has too many connections open`));
     this.finishOpen?.(remoteError('unreachable', `Orca on ${this.label} closed the connection during the handshake${code && code !== 1005 && code !== 1006 ? ` (${code}${reason ? `: ${plainText(reason).slice(0, 123)}` : ''})` : ''}`));
   }
@@ -806,7 +806,7 @@ export class PairedTransport {
       case 'busy':
         return `Can't reach Orca on ${this.label}`;
       case 'unauthorized':
-        return `Orca on ${this.label} no longer accepts this PC (its access link was revoked or replaced). Make a new access link there, run orca-wow remote add "${this.label}" and paste it.`;
+        return `Orca on ${this.label} no longer accepts ${THIS_COMPUTER} (its access link was revoked or replaced). Make a new access link there, run orca-wow remote add "${this.label}" and paste it.`;
       default:
         return plainText(String(err?.message || err).split('\n')[0]);
     }
@@ -825,7 +825,7 @@ export function checkStatus(status, label = 'the other computer') {
     throw remoteError('incompatible', `Orca on ${label} is too old (protocol ${server}; orca-wow needs ${MIN_SERVER_PROTOCOL_VERSION}). Update Orca there.`);
   }
   if (status?.deviceScope === 'mobile') {
-    throw remoteError('mobile_scope', `Orca on ${label} paired this PC as a phone, which can't use terminal.show. Make an access link for another Orca there (not --mobile) and run orca-wow remote add again.`);
+    throw remoteError('mobile_scope', `Orca on ${label} paired ${THIS_COMPUTER} as a phone, which can't use terminal.show. Make an access link for another Orca there (not --mobile) and run orca-wow remote add again.`);
   }
 }
 

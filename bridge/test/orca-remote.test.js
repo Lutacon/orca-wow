@@ -10,6 +10,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { OrcaClient, threadIdFor, projectIdFor } from '../src/orca.js';
 import { OrcaFleet } from '../src/orca-fleet.js';
+import { THIS_COMPUTER, THIS_COMPUTER_UC } from '../src/paths.js';
 import { Bridge } from '../src/bridge.js';
 import {
   nacl,
@@ -176,7 +177,7 @@ test('handshake failures say what to do and never show the token', async (t) => 
   assert.equal(err?.code, 'unauthorized');
   assert.equal(mac.authFailures, 1);
   const msg = wrong.describeFailure(err);
-  assert.match(msg, /MacBook no longer accepts this PC/);
+  assert.ok(msg.includes(`MacBook no longer accepts ${THIS_COMPUTER}`));
   assert.match(msg, /orca-wow remote add "MacBook"/);
   assert.ok(!msg.includes('not-the-token-xyz') && !msg.includes(mac.deviceToken));
 
@@ -362,7 +363,7 @@ test('a fleet shows this PC\'s Orca and the Mac\'s, and routes commands to the r
   assert.ok(fleet.projects.has(`e1~${projectIdFor('mac-repo')}`) && fleet.projects.has(projectIdFor('repo-1')));
   assert.equal(fleet.state, 'connected');
   assert.equal(fleet.error, null);
-  assert.deepEqual(fleet.environments().map((e) => [e.code, e.label, e.state, e.threads]), [['', 'This PC', 'connected', 1], ['e1', 'MacBook', 'connected', 1]]);
+  assert.deepEqual(fleet.environments().map((e) => [e.code, e.label, e.state, e.threads]), [['', THIS_COMPUTER_UC, 'connected', 1], ['e1', 'MacBook', 'connected', 1]]);
 
   // Writes go to the machine named by the id.
   await fleet.sendMessage(macId, 'Hello Mac');
@@ -455,7 +456,7 @@ test('the bridge labels the Mac\'s agents and projects with its name', async (t)
   assert.equal(macThread.env, 'MacBook');
   assert.equal(snap.threads.find((x) => !x.id.startsWith('e1~')).env, undefined);
   assert.ok(snap.projects.some((p) => p.env === 'MacBook' && /game · MacBook/.test(p.name)));
-  assert.deepEqual(snap.bridge.envs.map((e) => [e.label, e.state, e.n]), [['This PC', 'connected', 1], ['MacBook', 'connected', 1]]);
+  assert.deepEqual(snap.bridge.envs.map((e) => [e.label, e.state, e.n]), [[THIS_COMPUTER_UC, 'connected', 1], ['MacBook', 'connected', 1]]);
   // The remote's archive bookkeeping lives apart from this PC's.
   await b.runCommand({ id: 9, verb: 'archive', args: [macThread.id] });
   assert.equal(b.results.find((r) => r.id === 9)?.ok, true, b.results.find((r) => r.id === 9)?.msg);

@@ -74,6 +74,44 @@ test('decodes squares that drift off whole pixels', () => {
   assert.equal(out.payload.toString('utf8'), payload);
 });
 
+test('decodes a strip the display scaled, like a Mac that is not at its native resolution', () => {
+  // Bilinear resize, as the compositor does: 3px squares at ×1.19 land 3.57px apart.
+  const resize = (img, ratio, top) => {
+    const width = Math.ceil(img.width * ratio);
+    const height = Math.ceil(img.height * ratio) + top;
+    const data = Buffer.alloc(width * height * 3, 30);
+    for (let y = top; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const sx = Math.min(Math.max((x + 0.5) / ratio - 0.5, 0), img.width - 1);
+        const sy = Math.min(Math.max((y - top + 0.5) / ratio - 0.5, 0), img.height - 1);
+        const x0 = Math.floor(sx), y0 = Math.floor(sy);
+        const x1 = Math.min(x0 + 1, img.width - 1), y1 = Math.min(y0 + 1, img.height - 1);
+        const fx = sx - x0, fy = sy - y0;
+        for (let c = 0; c < 3; c++) {
+          const at = (xx, yy) => img.data[(yy * img.width + xx) * 3 + c];
+          const v = (at(x0, y0) * (1 - fx) + at(x1, y0) * fx) * (1 - fy) + (at(x0, y1) * (1 - fx) + at(x1, y1) * fx) * fy;
+          data[(y * width + x) * 3 + c] = Math.round(v);
+        }
+      }
+    }
+    return { width, height, data };
+  };
+  const cases = [
+    // MacBook Pro 14" at "looks like 1800×1169": the game draws at 3024 wide, the capture is 3600 wide; the strip starts below the notch.
+    { ratio: 3600 / 3024, top: 77, payload: 'm'.repeat(300) },
+    { ratio: 3600 / 3024, top: 77, payload: 'x'.repeat(MAX_PAYLOAD) },
+    // Close to whole pixels, but beyond what a 2% refinement of 3px reaches.
+    { ratio: 1.04, top: 0, payload: 'near whole pixels' },
+  ];
+  for (const { ratio, top, payload } of cases) {
+    const img = resize(renderCells(encodeFrame(7, payload), { cell: 3 }), ratio, top);
+    const out = decodeImage(img, null, { searchY: 80 });
+    assert.ok(out && !out.error, `ratio ${ratio.toFixed(3)}, ${payload.length} bytes: ${out?.error ?? 'not found'}`);
+    assert.equal(out.payload.toString('utf8'), payload);
+    assert.equal(decodeImage(img, out.geo, { searchY: 80 }).payload.toString('utf8'), payload, 'the geometry it found works as the next hint');
+  }
+});
+
 test('max payload fits', () => {
   const payload = 'x'.repeat(MAX_PAYLOAD);
   const cells = encodeFrame(9, payload);

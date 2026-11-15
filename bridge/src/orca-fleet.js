@@ -16,12 +16,13 @@ import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { OrcaClient, AGENT_CHOICES } from './orca.js';
 import { PairedTransport, readRemoteSecret, markRemoteV2, plainText, DEFAULT_SECRETS_DIR } from './orca-remote.js';
+import { THIS_COMPUTER, THIS_COMPUTER_UC } from './paths.js';
 
 const SEP = '~';
 const GONE = 'That agent is gone from Orca.';
 
 export class OrcaFleet extends EventEmitter {
-  constructor({ local = true, localLabel = 'This PC', remotes = [], secretsDir = DEFAULT_SECRETS_DIR, readSecret = (id) => readRemoteSecret(id, secretsDir), markV2 = (id) => markRemoteV2(id, secretsDir), log = () => {}, stateDir = null, ...clientOptions } = {}) {
+  constructor({ local = true, localLabel = THIS_COMPUTER_UC, remotes = [], secretsDir = DEFAULT_SECRETS_DIR, readSecret = (id) => readRemoteSecret(id, secretsDir), markV2 = (id) => markRemoteV2(id, secretsDir), log = () => {}, stateDir = null, ...clientOptions } = {}) {
     super();
     this.log = log;
     this.envs = [];
@@ -176,7 +177,7 @@ export class OrcaFleet extends EventEmitter {
   }
 
   get error() {
-    if (!this.envs.length) return 'No Orca to show: turn this PC\'s back on with `orca-wow local on`, or add one with `orca-wow remote add`.';
+    if (!this.envs.length) return `No Orca to show: turn ${THIS_COMPUTER}'s back on with \`orca-wow local on\`, or add one with \`orca-wow remote add\`.`;
     if (this.envs.some((e) => e.client.state === 'connected')) return null;
     const errors = this.envs.filter((e) => e.client.error);
     if (!errors.length) return null;
@@ -193,7 +194,7 @@ export class OrcaFleet extends EventEmitter {
     const connected = this.envs.filter((e) => e.client.state === 'connected');
     const live = connected[0] || this.envs[0];
     // The machines the game is showing ("Orca on MacBook"); none while nothing is connected.
-    const label = connected.map((e) => (e.local ? 'this PC' : e.label)).join(', ') || undefined;
+    const label = connected.map((e) => (e.local ? THIS_COMPUTER : e.label)).join(', ') || undefined;
     return { environment: { label, serverVersion: live?.client.config?.environment?.serverVersion }, providers: [] };
   }
 
@@ -282,7 +283,7 @@ class MissingRemote extends EventEmitter {
 
   start() {
     this.state = 'offline';
-    this.error = `${this.label}'s pairing is missing from this PC. Run orca-wow remote add "${this.label}" and paste a new access link.`;
+    this.error = `${this.label}'s pairing is missing from ${THIS_COMPUTER}. Run orca-wow remote add "${this.label}" and paste a new access link.`;
     this.emit('state', this.state, this.error);
   }
 
