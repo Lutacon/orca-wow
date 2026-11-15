@@ -1,6 +1,6 @@
 # Orca for World of Warcraft
 
-See and control your [Orca](https://github.com/stablyai/orca) agents (Claude Code, Codex and others, each in its own git worktree) without leaving **World of Warcraft: Forever**, on Windows (and on a Mac, not yet tested with the game running).
+See and control your [Orca](https://github.com/stablyai/orca) agents (Claude Code, Codex and others, each in its own git worktree) without leaving **World of Warcraft: Forever**, on Windows (and on a Mac, tested on one so far).
 
 This is a fork of [ryanrhughes/t3code-wow](https://github.com/ryanrhughes/t3code-wow). This fork adds Windows support and connects the addon to Orca.
 
@@ -56,9 +56,9 @@ Options: `--wow "D:\Games\World of Warcraft"`, `--slots N` and `--no-service` (t
 
 Linux: the original project's `./install.sh` is still here, but this fork hasn't tested it there. For a Mac, see the next section.
 
-## On a Mac (not yet tested with the game)
+## On a Mac
 
-The bridge and the addon also run on macOS, with the game's native Mac client and Orca on the same Mac. This part comes from the original project and was brought up to date for Orca. On a Mac (macOS 26), the installer, the bridge's link to Orca and the Screen Recording permission have been checked, but not yet with the game running: if you play this way, please report what happened.
+The bridge and the addon also run on macOS, with the game's native Mac client and Orca on the same Mac. This part comes from the original project and was brought up to date for Orca. It has been tested on one Mac so far (macOS 26, Apple silicon): the game shows the agents and their conversations, and the bridge reads what the game sends. Answering an agent's approvals and questions from the game hasn't been tried there yet. If you play this way, please report what happened.
 
 You need macOS 11 or newer, **World of Warcraft: Forever** installed from Battle.net, and Orca open on the same Mac.
 
@@ -79,7 +79,7 @@ You need macOS 11 or newer, **World of Warcraft: Forever** installed from Battle
 What's different from Windows:
 
 - The bridge's settings are in `~/.config/orca-wow`, and its log in `~/.local/state/orca-wow/bridge.log`.
-- The installer doesn't lock the addon's folders to your account, as it does on Windows. If other people have accounts on this Mac, check that they can't write to the game's AddOns folder.
+- Battle.net leaves the game's folder, AddOns included, open to every account on the Mac, and the installer doesn't lock the addon's folders to your account as it does on Windows. If other people have accounts on this Mac, they can change the addon.
 - The game window must be on screen, in the Space you're in. A minimized game, or one in another Space, can't be read.
 - In the copy box, press Cmd+C. Replies are read aloud with macOS's `say`. Dictation isn't available.
 - If `~/.local/bin` isn't on your PATH, run the commands as `~/.local/bin/orca-wow`.

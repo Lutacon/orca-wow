@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-- macOS, not yet tested with the game running: the README now has steps for running the game, Orca and the bridge on the same Mac.
+- macOS: the README now has steps for running the game, Orca and the bridge on the same Mac. Tested on one Mac so far.
 - On a Mac, the bridge asks macOS whether it may record the screen before it reads the game, instead of reading a screen without the game in it and never finding the addon. Until you allow it, `orca-wow status` and the installer say which `node` to turn on under Screen Recording.
 - On a Mac, the copy box and the copy buttons say Cmd+C, and the bridge calls the computer it runs on "this Mac" instead of "this PC".
+- On a Mac with the display at a scaled resolution (More Space, for example), agents stayed on "Loading…": macOS resizes the game's picture, and the bridge only looked for the addon's strip at whole-pixel sizes. It now finds the strip at the size the display draws it.
 - On a Mac, when the installer takes the game's folder from Battle.net's list of installs, it says which folder, as on Windows: that list is in `/Users/Shared/Battle.net`, which every account on the Mac can change.
 
 ## 0.4.3
